@@ -186,6 +186,7 @@ struct PassportBridgeTests {
         harness.event("subscribed")
         harness.control(Self.hello)
         expectEqual(harness.commands, ["host_ready"])
+        expectEqual(harness.handshakeHost, "passvoice")
         expectEqual(harness.statuses, [.handshaking])
         harness.control(["type": "ptt_down", "sessionId": 1])
         expectEqual(harness.outputs.count, 0)
@@ -293,6 +294,7 @@ struct PassportBridgeTests {
     private final class Harness {
         let now = DispatchTime.now()
         private(set) var commands: [String] = []
+        private(set) var handshakeHost: String?
         private(set) var outputs: [Playback] = []
         private(set) var taps = 0
         private(set) var keys: [PassportKeystroke] = []
@@ -307,7 +309,10 @@ struct PassportBridgeTests {
             tapVoiceKey: { [unowned self] in taps += 1 },
             sendKey: { [unowned self] key in keys.append(key) },
             observeVoiceTarget: { [unowned self] in input },
-            send: { [unowned self] command in commands.append(command.state ?? command.type) },
+            send: { [unowned self] command in
+                commands.append(command.state ?? command.type)
+                if command.type == "host_ready" { handshakeHost = command.host }
+            },
             log: { _ in },
             statusChanged: { [unowned self] status in statuses.append(status) },
             leadTime: .nanoseconds(0)
@@ -433,6 +438,70 @@ struct PassportBridgeTests {
     }
 }
 
+extension PassportBridgeTests {
+    func testOkClickSendsOneBackspaceWhileIdle() {
+        let harness = Harness()
+        harness.connect()
+        harness.control(["type": "button_event", "button": "ok", "event": "click"])
+        expectEqual(harness.keys.map(\.keyCode), [51]) // macOS Delete (Backspace)
+    }
+
+    func testOkClickDoesNotRunDuringRecordingOrWaitForVoiceText() {
+        let harness = Harness()
+        harness.connect()
+        let okClick = ["type": "button_event", "button": "ok", "event": "click"]
+        harness.control(["type": "ptt_down", "sessionId": 1])
+        harness.control(okClick)
+        harness.frame(session: 1, sequence: 0, sample: 12)
+        harness.control(["type": "ptt_up", "sessionId": 1, "finalSequence": 0])
+        harness.outputs[0].completeDrain()
+        harness.control(okClick)
+        harness.input.text = "A你好Z"
+        harness.input.selection = NSRange(location: 3, length: 0)
+        harness.bridge.tick(now: harness.now + .milliseconds(100))
+        expectEqual(harness.keys, [])
+    }
+
+    func testReturnPressedJustAfterUpWaitsForTheDelayedPttUpAndVoiceText() {
+        let harness = Harness()
+        harness.connect()
+        let pressedAfterUp: [String: Any] = [
+            "type": "button_event", "button": "down", "event": "click", "sessionId": 1,
+        ]
+        harness.control(pressedAfterUp)
+        expectEqual(harness.keys, [])
+        harness.control(["type": "ptt_down", "sessionId": 1])
+        harness.frame(session: 1, sequence: 0, sample: 12)
+        harness.control(pressedAfterUp)
+        harness.control(["type": "ptt_up", "sessionId": 1, "finalSequence": 0])
+        harness.outputs[0].completeDrain()
+        expectEqual(harness.keys, [])
+
+        harness.input.text = "A你好Z"
+        harness.input.selection = NSRange(location: 3, length: 0)
+        harness.bridge.tick(now: harness.now + .milliseconds(100))
+        expectEqual(harness.keys, [.returnKey])
+    }
+
+    func testTaggedReturnDoesNotFollowAnAbortedOrDifferentSession() {
+        for abort in [false, true] {
+            let harness = Harness()
+            harness.connect()
+            harness.control(["type": "button_event", "button": "down", "event": "click", "sessionId": 1])
+            if abort { harness.control(["type": "device_error", "sessionId": 1]) }
+            let session: UInt32 = abort ? 1 : 2
+            harness.control(["type": "ptt_down", "sessionId": session])
+            harness.frame(session: session, sequence: 0, sample: 12)
+            harness.control(["type": "ptt_up", "sessionId": session, "finalSequence": 0])
+            harness.outputs[0].completeDrain()
+            harness.input.text = "A你好Z"
+            harness.input.selection = NSRange(location: 3, length: 0)
+            harness.bridge.tick(now: harness.now + .milliseconds(100))
+            expectEqual(harness.keys, [])
+        }
+    }
+}
+
 private func expectEqual<T: Equatable>(_ actual: T, _ expected: T, line: UInt = #line) {
     precondition(actual == expected, "Line \(line): expected \(expected), got \(actual)")
 }
@@ -469,4 +538,8 @@ tests.testFinishWaitsForInclusiveTailAndBlackHoleDrainBeforeAllowingAnotherSessi
 tests.testMissingTailFrameIsFilledWithSilenceAfterWaiting()
 tests.testReconnectWaitsForDisconnectedCaptureToDrainAndCanReuseSessionID()
 try tests.testHelperDeliversShortHandshakeBeforeWaitingForReply()
-print("19 Passport bridge tests passed")
+tests.testOkClickSendsOneBackspaceWhileIdle()
+tests.testOkClickDoesNotRunDuringRecordingOrWaitForVoiceText()
+tests.testReturnPressedJustAfterUpWaitsForTheDelayedPttUpAndVoiceText()
+tests.testTaggedReturnDoesNotFollowAnAbortedOrDifferentSession()
+print("23 Passport bridge tests passed")

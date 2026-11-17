@@ -16,13 +16,14 @@ enum PassportGesture: Hashable {
 }
 
 enum PassportAction: Equatable {
-    case returnKey, deleteVoiceInput, none
+    case returnKey, backspace, deleteVoiceInput, none
 
     static func defaultAction(for gesture: PassportGesture) -> Self {
         switch gesture {
         case .downClick: return .returnKey
+        case .downLong: return .none
+        case .okClick: return .backspace
         case .okLong: return .deleteVoiceInput
-        case .downLong, .okClick: return .none
         }
     }
 }
@@ -31,6 +32,7 @@ struct PassportKeystroke: Equatable {
     let keyCode: UInt16
 
     static let returnKey = Self(keyCode: UInt16(kVK_Return))
+    static let backspace = Self(keyCode: UInt16(kVK_Delete))
 }
 
 struct PassportTextState: Equatable {
