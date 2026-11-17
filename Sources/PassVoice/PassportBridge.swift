@@ -22,6 +22,9 @@ struct PassportControl: Decodable {
     let finalSequence: UInt32?
     let message: String?
 
+    let button: String?
+    let event: String?
+
     var isSupportedHello: Bool {
         device == "ai-passport" && codec == "ima-adpcm"
             && sampleRate == Int(ADPCM.sampleRate) && channels == 1 && frameMs == 20
@@ -73,6 +76,8 @@ final class PassportBridge {
 
     private let makePlayback: (@escaping () -> Void) throws -> AudioPlayback
     private let tapVoiceKey: (() throws -> Void)?
+    private let resolveAction: (PassportGesture) -> PassportAction
+    private let sendKey: (PassportKeystroke) throws -> Void
     private let send: (HelperCommand) -> Void
     private let log: (String) -> Void
     private let statusChanged: (PassportStatus) -> Void
@@ -90,6 +95,8 @@ final class PassportBridge {
     init(
         makePlayback: @escaping (@escaping () -> Void) throws -> AudioPlayback,
         tapVoiceKey: (() throws -> Void)?,
+        resolveAction: @escaping (PassportGesture) -> PassportAction = PassportAction.defaultAction,
+        sendKey: @escaping (PassportKeystroke) throws -> Void = { _ in },
         send: @escaping (HelperCommand) -> Void,
         log: @escaping (String) -> Void,
         statusChanged: @escaping (PassportStatus) -> Void = { _ in },
@@ -98,6 +105,8 @@ final class PassportBridge {
     ) {
         self.makePlayback = makePlayback
         self.tapVoiceKey = tapVoiceKey
+        self.resolveAction = resolveAction
+        self.sendKey = sendKey
         self.send = send
         self.log = log
         self.statusChanged = statusChanged
@@ -206,6 +215,9 @@ final class PassportBridge {
             statusChanged(.finishing)
             sendState("processing")
             flush(capture, now: now)
+        case "button_event":
+            guard isReady, let gesture = PassportGesture(button: control.button, event: control.event) else { return }
+            perform(resolveAction(gesture))
         case "device_error":
             if let capture, control.sessionId == capture.id {
                 abort("Passport error: \(control.message ?? "unknown")")
@@ -214,6 +226,17 @@ final class PassportBridge {
                 sendState("ready")
             }
         default:
+            break
+        }
+    }
+
+    private func perform(_ action: PassportAction) {
+        guard capture == nil else { return }
+        switch action {
+        case .returnKey:
+            do { try sendKey(.returnKey) }
+            catch { log("Unable to send Passport keystroke: \(error.localizedDescription)") }
+        case .none:
             break
         }
     }

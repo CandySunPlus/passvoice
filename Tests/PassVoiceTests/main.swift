@@ -1,6 +1,13 @@
 import Foundation
 
 struct PassportBridgeTests {
+    func testDownClickSendsOneReturnWhileIdle() {
+        let harness = Harness()
+        harness.connect()
+        harness.downClick()
+        expectEqual(harness.keys, [.returnKey])
+    }
+
     func testFinishWaitsForInclusiveTailAndBlackHoleDrainBeforeAllowingAnotherSession() {
         let harness = Harness()
         harness.event("connected")
@@ -118,6 +125,7 @@ struct PassportBridgeTests {
         private(set) var commands: [String] = []
         private(set) var outputs: [Playback] = []
         private(set) var taps = 0
+        private(set) var keys: [PassportKeystroke] = []
         private(set) var statuses: [PassportStatus] = []
         lazy var bridge = PassportBridge(
             makePlayback: { [unowned self] _ in
@@ -126,6 +134,7 @@ struct PassportBridgeTests {
                 return output
             },
             tapVoiceKey: { [unowned self] in taps += 1 },
+            sendKey: { [unowned self] key in keys.append(key) },
             send: { [unowned self] command in commands.append(command.state ?? command.type) },
             log: { _ in },
             statusChanged: { [unowned self] status in statuses.append(status) },
@@ -137,6 +146,10 @@ struct PassportBridgeTests {
             event("subscribed")
             control(PassportBridgeTests.hello)
             event("host_ready_ack")
+        }
+
+        func downClick() {
+            control(["type": "button_event", "button": "down", "event": "click", "durationMs": 0, "seq": 2])
         }
 
         func control(_ fields: [String: Any]) {
@@ -199,8 +212,9 @@ private func expectTrue(_ actual: Bool, line: UInt = #line) {
 }
 
 let tests = PassportBridgeTests()
+tests.testDownClickSendsOneReturnWhileIdle()
 tests.testFinishWaitsForInclusiveTailAndBlackHoleDrainBeforeAllowingAnotherSession()
 tests.testMissingTailFrameIsFilledWithSilenceAfterWaiting()
 tests.testReconnectWaitsForDisconnectedCaptureToDrainAndCanReuseSessionID()
 try tests.testHelperDeliversShortHandshakeBeforeWaitingForReply()
-print("4 Passport bridge tests passed")
+print("5 Passport bridge tests passed")
