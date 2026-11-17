@@ -8,7 +8,7 @@ PassVoice 在 macOS 上接收 AI Passport 的 BLE 语音，把音频送入 Black
 
 - 在豆包的「语音输入」设置中，把麦克风选为 **BlackHole 2ch**，把「免按模式」设为**右 Option**，并在输入框使用豆包输入法。
 - 在 Passport 与 Vokie 已连接时，先退出 Vokie。若 macOS 提示访问蓝牙，请允许 PassVoice。通过菜单里的「授权辅助功能」给 PassVoice 模拟语音快捷键的权限。
-- 若菜单显示「授权输入监控」，请允许 PassVoice 检查语音提交期间是否有其它输入。PassVoice 不记录按键，也不会在切换焦点或无法确认豆包已提交文字时发送暂存的回车。
+- 若菜单显示「授权输入监控」，请允许 PassVoice 检查语音提交和后续编辑。PassVoice 不记录按键。暂存的回车需要确认豆包已在原输入框提交文字。删除上一段语音输入还需要确认这段文字在后续编辑中仍然保留。
 - 勾选「登录时启动」后，PassVoice 会在你下次登录 macOS 时打开。若菜单显示「待批准」，用「打开登录项设置」完成授权。再次点击开关可关闭。
 
 菜单栏 App 需要 macOS 13 或更新版本。安装 Xcode Command Line Tools 后，可在仓库根目录重新构建。
@@ -28,7 +28,9 @@ PassVoice 在 macOS 上接收 AI Passport 的 BLE 语音，把音频送入 Black
 | DOWN | 回车 | 不执行 |
 | OK | 退格 | 删除上一段语音输入 |
 
-支持 BLE V1 的旧固件仍可连接，PassVoice 会处理设备已上报的手势。应用下面两份补丁可启用 DOWN 长按及 UP 独占录音控制。录音期间按 DOWN 或 OK 会被忽略。
+支持 BLE V1 的旧固件仍可连接，PassVoice 会处理设备已上报的手势。应用下面的补丁可启用 DOWN 长按及 UP 独占录音控制。录音期间按 DOWN 或 OK 会被忽略。
+
+蓝牙音频处理完毕后可再次按 UP 录音。如果此前的语音仍可能在同一输入框提交，PassVoice 会继续录音，并停用这次的暂存回车和语音删除。系统合并的编辑或输入法组合文字如果无法确认语音范围，长按 OK 会保留整段文字。
 
 ## 构建配套固件
 
@@ -40,7 +42,8 @@ git clone https://github.com/CandySunPlus/vokie-ai-passport-firmware.git ../voki
 cd ../vokie-ai-passport-firmware
 git checkout --detach 0e3543259f578f5d5678a58edecca5c8bb81e927
 git am "$passvoice_repo/firmware/0001-passvoice-up-only.patch" \
-  "$passvoice_repo/firmware/0002-passvoice-down-hold.patch"
+  "$passvoice_repo/firmware/0002-passvoice-down-hold.patch" \
+  "$passvoice_repo/firmware/0003-passvoice-deliver-gestures-from-worker.patch"
 . /path/to/esp-idf-v5.5.3/export.sh
 ./tools/validate.sh
 ```
@@ -77,6 +80,7 @@ swift build -c release
 - 空闲时短按 DOWN，检查是否收到一次回车。用 UP 停止较长的语音后立即短按 DOWN，检查是否先落字，再收到一次回车。在等待期间切换到另一个输入框，检查新输入框没有收到回车。
 - 空闲时短按 OK，检查是否退格一次。长按 DOWN，检查默认不执行。分别修改四个手势的绑定，检查每次按压只执行对应动作一次。录音时重复四种手势，再按 UP 结束，检查录音完整且手势未执行。恢复默认设置后复查四种手势。
 - 在同一个输入框先输入 A，再用 Passport 说 B。等 B 落地后手打 C，长按 OK，检查剩下 A 和 C。再次长按或切换到另一个输入框后长按，检查文字没有变化。
+- 确认语音 B 落地后，手动删除 B 并重新打出相同文字。长按 OK，检查手打的 B 保留。
 - 在录音过程中断开设备，连接恢复后再做一次完整语音输入。检查桥接日志是否再次出现 `Passport ready`。
 - 使用 `--manual --verbose` 分开验证音频与快捷键。先用 Mac 的物理快捷键启动豆包语音，再按 UP 开始采集。说完按 UP，看到 `drained` 日志后，再用物理快捷键结束。日志会记录会话 ID 和音频帧序号。
 

@@ -39,6 +39,17 @@ private final class MacVoiceTarget: PassportVoiceTarget {
     private static let inputEvents: [CGEventType] = [
         .keyDown, .keyUp, .flagsChanged, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel,
     ]
+    private static let typingKeys: Set<Int> = [
+        kVK_ANSI_A, kVK_ANSI_B, kVK_ANSI_C, kVK_ANSI_D, kVK_ANSI_E, kVK_ANSI_F, kVK_ANSI_G,
+        kVK_ANSI_H, kVK_ANSI_I, kVK_ANSI_J, kVK_ANSI_K, kVK_ANSI_L, kVK_ANSI_M, kVK_ANSI_N,
+        kVK_ANSI_O, kVK_ANSI_P, kVK_ANSI_Q, kVK_ANSI_R, kVK_ANSI_S, kVK_ANSI_T, kVK_ANSI_U,
+        kVK_ANSI_V, kVK_ANSI_W, kVK_ANSI_X, kVK_ANSI_Y, kVK_ANSI_Z,
+        kVK_ANSI_0, kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4,
+        kVK_ANSI_5, kVK_ANSI_6, kVK_ANSI_7, kVK_ANSI_8, kVK_ANSI_9,
+        kVK_ANSI_Equal, kVK_ANSI_Minus, kVK_ANSI_LeftBracket, kVK_ANSI_RightBracket,
+        kVK_ANSI_Quote, kVK_ANSI_Semicolon, kVK_ANSI_Backslash, kVK_ANSI_Comma,
+        kVK_ANSI_Slash, kVK_ANSI_Period, kVK_ANSI_Grave, kVK_Space,
+    ]
 
     private let element: AXUIElement
     private let processID: pid_t
@@ -49,6 +60,7 @@ private final class MacVoiceTarget: PassportVoiceTarget {
     private var inputRunLoopSource: CFRunLoopSource?
     private var activationObserver: NSObjectProtocol?
     private var inputSourceObserver: NSObjectProtocol?
+    private var onEdit: ((PassportEditObservation) -> Void)?
 
     private init(element: AXUIElement, processID: pid_t) {
         self.element = element
@@ -71,12 +83,18 @@ private final class MacVoiceTarget: PassportVoiceTarget {
     }
 
     var canConfirmVoiceText: Bool {
-        guard !lostFocus, !otherInput, let inputTap, CGEvent.tapIsEnabled(tap: inputTap),
-              !IsSecureEventInputEnabled(), Self.doubaoIsSelected() else {
+        guard !lostFocus, !otherInput, canListenToInput, Self.doubaoIsSelected() else {
             otherInput = true
             return false
         }
         return true
+    }
+
+    var isFocused: Bool { stillFocused() }
+
+    private var canListenToInput: Bool {
+        guard let inputTap else { return false }
+        return CGEvent.tapIsEnabled(tap: inputTap) && !IsSecureEventInputEnabled()
     }
 
     func snapshot() -> PassportTextState? {
@@ -101,7 +119,7 @@ private final class MacVoiceTarget: PassportVoiceTarget {
         guard range.length > 0, let indices = expected.indices(of: range),
               let originalSelection = Self.rangeValue(expected.selectedRange),
               let voiceSelection = Self.rangeValue(range),
-              !IsSecureEventInputEnabled(), stillFocused(),
+              onEdit != nil, canListenToInput, stillFocused(),
               isSettable(selectionAttribute), isSettable(textAttribute),
               hasOnlySelection(expected.selectedRange), snapshot() == expected,
               !IsSecureEventInputEnabled() else { return }
@@ -128,13 +146,50 @@ private final class MacVoiceTarget: PassportVoiceTarget {
         }
     }
 
-    func finishCommitObservation() {
+    func stopMonitoringInput() {
         if let inputRunLoopSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), inputRunLoopSource, .commonModes) }
         if let inputTap { CFMachPortInvalidate(inputTap) }
         if let inputSourceObserver { DistributedNotificationCenter.default().removeObserver(inputSourceObserver) }
         inputRunLoopSource = nil
         inputTap = nil
         inputSourceObserver = nil
+    }
+
+    func monitorEdits(
+        ifSnapshotIs expected: PassportTextState, onEdit: @escaping (PassportEditObservation) -> Void
+    ) -> Bool {
+        guard let focusObserver, canConfirmVoiceText, snapshot() == expected else { return false }
+        let context = Unmanaged.passUnretained(self).toOpaque()
+        let value = kAXValueChangedNotification as CFString
+        let selection = kAXSelectedTextChangedNotification as CFString
+        guard AXObserverAddNotification(focusObserver, element, value, context) == .success else { return false }
+        guard AXObserverAddNotification(focusObserver, element, selection, context) == .success else {
+            _ = AXObserverRemoveNotification(focusObserver, element, value)
+            return false
+        }
+        guard canConfirmVoiceText, snapshot() == expected else { return false }
+        self.onEdit = onEdit
+        return true
+    }
+
+    private func loseFocus() {
+        lostFocus = true
+        stopMonitoringInput()
+        onEdit?(.uncertain)
+    }
+
+    private func accessibilityChanged(_ notification: String) {
+        switch notification {
+        case kAXValueChangedNotification, kAXSelectedTextChangedNotification:
+            guard let onEdit else { return }
+            guard let current = snapshot() else {
+                onEdit(.uncertain)
+                return
+            }
+            onEdit(notification == kAXValueChangedNotification ? .value(current) : .selection(current))
+        default:
+            loseFocus()
+        }
     }
 
     private func isSettable(_ attribute: CFString) -> Bool {
@@ -161,9 +216,10 @@ private final class MacVoiceTarget: PassportVoiceTarget {
 
     private func observeFocus() -> Bool {
         var observer: AXObserver?
-        guard AXObserverCreate(processID, { _, _, _, context in
+        guard AXObserverCreate(processID, { _, _, notification, context in
             guard let context else { return }
-            Unmanaged<MacVoiceTarget>.fromOpaque(context).takeUnretainedValue().lostFocus = true
+            Unmanaged<MacVoiceTarget>.fromOpaque(context).takeUnretainedValue()
+                .accessibilityChanged(notification as String)
         }, &observer) == .success, let observer else { return false }
         let app = AXUIElementCreateApplication(processID)
         let context = Unmanaged.passUnretained(self).toOpaque()
@@ -179,19 +235,20 @@ private final class MacVoiceTarget: PassportVoiceTarget {
             guard let self,
                   let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
                   app.processIdentifier != self.processID else { return }
-            self.lostFocus = true
+            self.loseFocus()
         }
         return true
     }
 
     private func observeInput() -> Bool {
         let mask = Self.inputEvents.reduce(CGEventMask(0)) { $0 | (1 << $1.rawValue) }
-        // Read no key codes or characters. A competing input event only invalidates attribution.
+        // During voice input, competing events only invalidate attribution. After
+        // commit, distinguish delete keys without reading typed characters.
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap, place: .headInsertEventTap, options: .listenOnly, eventsOfInterest: mask,
-            callback: { _, _, event, context in
+            callback: { _, type, event, context in
                 if let context, event.getIntegerValueField(.eventSourceUserData) != VoiceHotkey.eventTag {
-                    Unmanaged<MacVoiceTarget>.fromOpaque(context).takeUnretainedValue().otherInput = true
+                    Unmanaged<MacVoiceTarget>.fromOpaque(context).takeUnretainedValue().inputChanged(type, event: event)
                 }
                 return Unmanaged.passUnretained(event)
             }, userInfo: Unmanaged.passUnretained(self).toOpaque()
@@ -201,12 +258,39 @@ private final class MacVoiceTarget: PassportVoiceTarget {
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         inputSourceObserver = DistributedNotificationCenter.default().addObserver(
             forName: Self.inputSourceDidChange, object: nil, queue: .main
-        ) { [weak self] _ in self?.otherInput = true }
+        ) { [weak self] _ in
+            self?.otherInput = true
+            self?.onEdit?(.uncertain)
+        }
         return true
     }
 
+    private func inputChanged(_ type: CGEventType, event: CGEvent) {
+        otherInput = true
+        guard let onEdit else { return }
+        switch type {
+        case .tapDisabledByTimeout, .tapDisabledByUserInput:
+            onEdit(.uncertain)
+        case .leftMouseDown, .rightMouseDown, .otherMouseDown:
+            onEdit(.input)
+        case .keyDown:
+            let keyCode = Int(event.getIntegerValueField(.keyboardEventKeycode))
+            if !event.flags.intersection([.maskCommand, .maskControl, .maskAlternate]).isEmpty {
+                onEdit(.uncertain)
+            } else if keyCode == kVK_Delete || keyCode == kVK_ForwardDelete {
+                onEdit(.deletion(backward: keyCode == kVK_Delete))
+            } else if Self.typingKeys.contains(keyCode) {
+                onEdit(.typing)
+            } else if ![kVK_LeftArrow, kVK_RightArrow, kVK_UpArrow, kVK_DownArrow].contains(keyCode) {
+                onEdit(.input)
+            }
+        default:
+            break
+        }
+    }
+
     deinit {
-        finishCommitObservation()
+        stopMonitoringInput()
         let runLoop = CFRunLoopGetMain()
         if let focusObserver { CFRunLoopRemoveSource(runLoop, AXObserverGetRunLoopSource(focusObserver), .commonModes) }
         if let activationObserver { NSWorkspace.shared.notificationCenter.removeObserver(activationObserver) }

@@ -57,8 +57,10 @@ struct PassportTextState: Equatable {
     let selectedRange: NSRange
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.selectedRange == rhs.selectedRange && lhs.text.utf16.elementsEqual(rhs.text.utf16)
+        lhs.selectedRange == rhs.selectedRange && lhs.hasSameText(as: rhs)
     }
+
+    func hasSameText(as other: Self) -> Bool { text.utf16.elementsEqual(other.text.utf16) }
 
     func indices(of range: NSRange) -> Range<String.Index>? {
         let count = text.utf16.count
@@ -116,9 +118,19 @@ struct PassportTextState: Equatable {
     }
 }
 
+enum PassportEditObservation {
+    case value(PassportTextState)
+    case selection(PassportTextState)
+    case typing
+    case input
+    case deletion(backward: Bool)
+    case uncertain
+}
+
 protocol PassportVoiceTarget: AnyObject {
     // False after another input or input source change during observation.
     var canConfirmVoiceText: Bool { get }
+    var isFocused: Bool { get }
 
     // Nil after any loss of focus or if the input cannot be read.
     func snapshot() -> PassportTextState?
@@ -126,8 +138,13 @@ protocol PassportVoiceTarget: AnyObject {
     // Recheck at delivery, so a deferred keystroke cannot follow the new focus.
     func send(_ key: PassportKeystroke, ifSnapshotIs expected: PassportTextState) throws
 
-    // Stop observing competing input once the commit is known. Keep observing focus.
-    func finishCommitObservation()
+    // Become a focus-only observation once the commit can no longer be attributed.
+    func stopMonitoringInput()
+
+    // Report edits of the same focused input after a confirmed commit.
+    func monitorEdits(
+        ifSnapshotIs expected: PassportTextState, onEdit: @escaping (PassportEditObservation) -> Void
+    ) -> Bool
 
     func delete(_ range: NSRange, ifSnapshotIs expected: PassportTextState) throws
 }
