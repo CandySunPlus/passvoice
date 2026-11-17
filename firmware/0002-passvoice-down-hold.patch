@@ -1,0 +1,322 @@
+From f1a53848e075b3f25dc8cd5836aa32442507d710 Mon Sep 17 00:00:00 2001
+From: NikSun <candysfm@gmail.com>
+Date: Tue, 17 Nov 2026 20:42:35 +0800
+Subject: [PATCH] feat(ble): report DOWN holds to PassVoice
+
+Ref: CandySunPlus/passvoice#6
+---
+ docs/CHANGELOG.md                      |  2 ++
+ docs/CHANGELOG.zh_CN.md                |  2 ++
+ docs/ai-passport-ble-protocol.md       | 22 ++++++++----
+ docs/ai-passport-ble-protocol.zh_CN.md | 16 ++++++---
+ main/button_gesture.h                  |  3 ++
+ main/vokie_ble.c                       | 47 ++++++++++++++------------
+ sdkconfig.defaults                     |  2 +-
+ tests/test_button_gesture.c            | 42 +++++++++++++++++++++++
+ 8 files changed, 102 insertions(+), 34 deletions(-)
+
+diff --git a/docs/CHANGELOG.md b/docs/CHANGELOG.md
+index 4fdb98e..92462b1 100644
+--- a/docs/CHANGELOG.md
++++ b/docs/CHANGELOG.md
+@@ -6,6 +6,8 @@
+
+ ## Unreleased
+
++- Report a 650 ms DOWN hold to PassVoice as a BLE V1 button event, including a hold immediately following a tap. Each press reports at most one gesture. Other hosts still receive only DOWN clicks.
++
+ - Let PassVoice opt in to an UP-only capture policy. Ignore DOWN and OK during capture, including a press released after the stop, and report a fresh press immediately after UP with the stopped session ID if its end notification is still pending. Other hosts keep their existing button behavior.
+
+ - Validate the CW2017 cell voltage before accepting the first charge reading. When the gauge reports 0% with an invalid voltage, show an unavailable reading until the gauge recovers.
+diff --git a/docs/CHANGELOG.zh_CN.md b/docs/CHANGELOG.zh_CN.md
+index 44b7290..07982de 100644
+--- a/docs/CHANGELOG.zh_CN.md
++++ b/docs/CHANGELOG.zh_CN.md
+@@ -6,6 +6,8 @@
+
+ ## Unreleased
+
++- 通过 BLE V1 按键事件向 PassVoice 上报 650 ms 的 DOWN 长按，紧接短按的长按也可识别。每次按压最多上报一种手势。其它主机仍只收到 DOWN 短按。
++
+ - PassVoice 可启用仅由 UP 控制采集的按键模式。采集中按下 DOWN 或 OK 会被忽略，即使结束采集后才松手；UP 结束采集后可立即触发新的按压，如果结束通知仍在发送，则附带已停止的会话 ID。其它主机的按键行为保持不变。
+
+ - 接受 CW2017 的首次电量读数前先检查电芯电压。若电量计同时返回 0% 和无效电压，界面会显示读数暂不可用，等电量计恢复后再显示百分比。
+diff --git a/docs/ai-passport-ble-protocol.md b/docs/ai-passport-ble-protocol.md
+index 51271aa..73dab77 100644
+--- a/docs/ai-passport-ble-protocol.md
++++ b/docs/ai-passport-ble-protocol.md
+@@ -35,6 +35,7 @@ of 182 bytes. Device-to-host messages are:
+ {"v":1,"type":"ptt_up","sessionId":123,"seq":1,"finalSequence":7}
+ {"v":1,"type":"button_event","button":"down","event":"click","durationMs":0,"seq":2}
+ {"v":1,"type":"button_event","button":"ok","event":"long","durationMs":650,"seq":3}
++{"v":1,"type":"button_event","button":"down","event":"long","durationMs":650,"seq":4}
+ {"v":1,"type":"device_error","sessionId":123,"message":"transport"}
+ ```
+
+@@ -76,18 +77,27 @@ The host keeps a request active through capture, ASR, post-processing, return,
+ and paste, until it receives a terminal `session_state`. The firmware recognizes
+ an `OK` long press at 650 ms.
+
+-Short clicks are emitted on debounced key release, without waiting for the driver's 180 ms double-click window. Rapid consecutive taps are separate actions. Delayed single/double-click callbacks are ignored by Vokie. OK uses an independent 650 ms hold timer, including when held immediately after a short tap; releasing after a long action does not also delete a character. Presses that started before the host handshake or on another connection do not produce an action.
++Short clicks are emitted on debounced key release, without waiting for the
++driver's 180 ms double-click window. Rapid consecutive taps are separate actions.
++Delayed single/double-click callbacks are ignored. OK's independent hold timer
++also recognizes a hold immediately after a short tap. Each press reports at
++most one gesture. Presses that started before the host handshake or on another
++connection do not produce an action.
+
+ A host can opt in to the PassVoice button policy for its connection by
+-sending `"host":"passvoice"` in `host_ready`. Only an `UP` click can end
+-capture in this mode. `DOWN` and `OK` gestures that begin or trigger during
++sending `"host":"passvoice"` in `host_ready`. Both `DOWN` and `OK` report
++`click` or `long` through `button_event`. Each key uses its own 650 ms hold
++timer, including after a quick tap. The hold is the only event for that press.
++Only an `UP` click can end capture in this mode. `DOWN` and `OK` gestures
++that begin or trigger during
+ capture are suppressed. A fresh press can trigger immediately after `UP`
+ requests the stop. If the worker has not finished sending `ptt_up`, that
+ `button_event` includes an optional `sessionId` for the stopped capture. The
+-notification may arrive before `ptt_down` or `ptt_up`; the host uses the
++notification may arrive before `ptt_down` or `ptt_up`. The host uses the
+ session ID to wait for a matching normal stop before acting on a deferred
+-Return. Older firmware ignores the optional `host` field. Hosts that omit it
+-or send another value retain the mapping above.
++Return. Firmware predating this mode ignores the optional `host` field.
++Firmware predating `DOWN` hold support reports only its `click` event. Other
++hosts retain the mapping above, with `DOWN` reporting only clicks.
+
+ ## Audio fragment envelope
+
+diff --git a/docs/ai-passport-ble-protocol.zh_CN.md b/docs/ai-passport-ble-protocol.zh_CN.md
+index e33e2d4..72436db 100644
+--- a/docs/ai-passport-ble-protocol.zh_CN.md
++++ b/docs/ai-passport-ble-protocol.zh_CN.md
+@@ -29,6 +29,7 @@ Control 值是带 `v: 1` 的完整 UTF-8 JSON 对象，最长 182 字节。设
+ {"v":1,"type":"ptt_up","sessionId":123,"seq":1,"finalSequence":7}
+ {"v":1,"type":"button_event","button":"down","event":"click","durationMs":0,"seq":2}
+ {"v":1,"type":"button_event","button":"ok","event":"long","durationMs":650,"seq":3}
++{"v":1,"type":"button_event","button":"down","event":"long","durationMs":650,"seq":4}
+ {"v":1,"type":"device_error","sessionId":123,"message":"transport"}
+ ```
+
+@@ -64,15 +65,20 @@ Control 值是带 `v: 1` 的完整 UTF-8 JSON 对象，最长 182 字节。设
+
+ 主机从采集开始直到收到终态 `session_state` 前，都把请求视为活动状态；该窗口覆盖 ASR、后处理、回传和粘贴。固件在 650 ms 时识别 `OK` 长按。
+
+-短按在去抖后的松手事件立即触发，不等待驱动的 180 ms 双击窗口。快速连续短按分别产生动作，Vokie 忽略驱动延后的单击/双击回调。OK 使用独立的 650 ms 长按计时，短按后马上再长按也有效；长按后松手不再额外删除一个字符。在主机握手前或另一连接期间开始的按压不产生动作。
++短按在去抖后的松手事件立即触发，无需等待驱动的 180 ms 双击窗口。快速连续短按分别产生
++动作。固件忽略驱动延后的单击和双击回调。OK 的独立长按计时也能识别紧接短按的长按。
++每次按压最多上报一种手势。在主机握手前或另一连接期间开始的按压不产生动作。
+
+ 主机可以在 `host_ready` 中发送 `"host":"passvoice"`，为本次连接启用
+-PassVoice 按键策略。此模式只有单击 `UP` 能结束采集；在采集中开始或触发的
++PassVoice 按键策略。`DOWN` 和 `OK` 都使用 `button_event` 上报 `click` 或
++`long`。两个按键分别使用独立的 650 ms 长按计时，紧接短按的长按也可识别。长按
++是当次按压的唯一事件。此模式只有单击 `UP` 能结束采集。在采集中开始或触发的
+ `DOWN` 和 `OK` 手势会被忽略。`UP` 请求停止后，新按压可立即生效。如果工作
+ 任务尚未发送完 `ptt_up`，对应的 `button_event` 会包含可选的 `sessionId`，
+-用于标识已请求停止的采集。该通知可能早于 `ptt_down` 或 `ptt_up` 到达；主机
+-根据会话 ID 等待匹配的正常停止，再处理暂存的回车。旧固件会忽略可选的
+-`host` 字段。省略该字段或发送其它值的主机仍使用上表的映射。
++用于标识已请求停止的采集。该通知可能早于 `ptt_down` 或 `ptt_up` 到达。主机
++根据会话 ID 等待匹配的正常停止，再处理暂存的回车。早于该模式的固件会忽略可选的
++`host` 字段。早于 `DOWN` 长按支持的固件只上报它的 `click` 事件。其它主机仍
++使用上表的映射，`DOWN` 只上报短按。
+
+ ## 音频分片封装
+
+diff --git a/main/button_gesture.h b/main/button_gesture.h
+index 7f5a9a5..93d1c93 100644
+--- a/main/button_gesture.h
++++ b/main/button_gesture.h
+@@ -58,6 +58,9 @@ static inline button_edit_t button_edit_update(button_gesture_t *s, button_edge_
+     // Zero context also invalidates a press that ends after the UP stop.
+     const button_action_t action = button_gesture_update(s, edge, now_ms,
+                                       blocked ? 0 : host.connection, long_ms);
++    if (action == BUTTON_ACTION_LONG && !is_ok && !host.passvoice) {
++        return (button_edit_t){0};
++    }
+     return (button_edit_t){action,
+         action != BUTTON_ACTION_NONE && !host.passvoice && host.recording && is_ok};
+ }
+diff --git a/main/vokie_ble.c b/main/vokie_ble.c
+index 3668b6e..ee9bcad 100644
+--- a/main/vokie_ble.c
++++ b/main/vokie_ble.c
+@@ -86,7 +86,7 @@ static volatile uint32_t s_button_seq;
+ static TaskHandle_t s_audio_task;
+ static bool s_started;
+ static button_gesture_t s_button_gestures[3];
+-static esp_timer_handle_t s_ok_hold_timer;
++static esp_timer_handle_t s_button_hold_timers[BSP_BTN_COUNT];
+ static volatile uint32_t s_connection_epoch = 1;
+ static bool s_hello_sent;
+ static volatile uint32_t s_link_update_count;
+@@ -200,11 +200,10 @@ static void send_button_event(bsp_btn_t button, const char *event,
+
+ static void button_cb(bsp_btn_t button, bsp_btn_ev_t event, void *user);
+
+-static void ok_hold_expired(void *arg)
++static void button_hold_expired(void *arg)
+ {
+-    (void)arg;
+     // Both this timer and the button driver's callbacks run on ESP_TIMER_TASK.
+-    button_cb(BSP_BTN_OK, BSP_BTN_LONG, NULL);
++    button_cb((bsp_btn_t)(intptr_t)arg, BSP_BTN_LONG, NULL);
+ }
+
+ static int access_cb(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg);
+@@ -466,7 +465,8 @@ static void try_deep_sleep(uint32_t now)
+
+     // From here the hand-offs are terminal. Reboot if an input/USB attach
+     // races shutdown or the board cannot safely arm the wake pad.
+-    esp_timer_stop(s_ok_hold_timer);
++    (void)esp_timer_stop(s_button_hold_timers[BSP_BTN_DOWN]);
++    (void)esp_timer_stop(s_button_hold_timers[BSP_BTN_OK]);
+     if (nimble_port_stop() != 0 || nimble_port_deinit() != ESP_OK ||
+         !ui_status_quiesce() || bsp_button_prepare_deep_sleep() != ESP_OK) {
+         ESP_LOGW(TAG, "Deep sleep teardown failed; restarting");
+@@ -944,15 +944,16 @@ static void button_cb(bsp_btn_t button, bsp_btn_ev_t event, void *user)
+     const uint32_t duration_ms = now_ms - gesture->started_ms;
+     device_diag_emit(DD_BUTTON, s_session, button, edge, action, duration_ms,
+                      diagnostic_flags(), context, gesture->context, s_stop_reason);
+-    if (button == BSP_BTN_OK && event == BSP_BTN_PRESS) {
+-        // The driver's double-click state does not time a held second press.
+-        // An independent one-shot keeps OK long-press valid after quick taps.
+-        (void)esp_timer_stop(s_ok_hold_timer);
+-        esp_err_t err = esp_timer_start_once(s_ok_hold_timer,
+-                                             BUTTON_LONG_PRESS_MS * 1000);
+-        if (err != ESP_OK) ESP_LOGW(TAG, "OK hold timer: %s", esp_err_to_name(err));
+-    } else if (button == BSP_BTN_OK && event == BSP_BTN_RELEASE) {
+-        (void)esp_timer_stop(s_ok_hold_timer);
++    esp_timer_handle_t hold_timer = s_button_hold_timers[button];
++    if (hold_timer && (event == BSP_BTN_PRESS || event == BSP_BTN_RELEASE)) {
++        (void)esp_timer_stop(hold_timer);
++        if (event == BSP_BTN_PRESS && (button == BSP_BTN_OK || edit_host.passvoice)) {
++            // The driver's double-click state does not time a held second press.
++            esp_err_t err = esp_timer_start_once(hold_timer, BUTTON_LONG_PRESS_MS * 1000);
++            if (err != ESP_OK) {
++                ESP_LOGW(TAG, "%s hold timer: %s", button_name(button), esp_err_to_name(err));
++            }
++        }
+     }
+     if (event == BSP_BTN_PRESS) {
+         switch (button) {
+@@ -997,10 +998,10 @@ static void button_cb(bsp_btn_t button, bsp_btn_ev_t event, void *user)
+     }
+     if (edit_host.passvoice) {
+         // The host owns bindings and text-commit timing. Only UP may stop capture.
+-        if (button == BSP_BTN_OK || action == BUTTON_ACTION_CLICK) {
+-            send_button_event(button, action == BUTTON_ACTION_LONG ? "long" : "click",
+-                              button == BSP_BTN_DOWN ? 0 : duration_ms, edit_host.stopped_session);
+-        }
++        const bool long_press = action == BUTTON_ACTION_LONG;
++        send_button_event(button, long_press ? "long" : "click",
++                          button == BSP_BTN_DOWN && !long_press ? 0 : duration_ms,
++                          edit_host.stopped_session);
+         return;
+     }
+     if (button == BSP_BTN_DOWN && action == BUTTON_ACTION_CLICK) {
+@@ -1281,12 +1282,14 @@ esp_err_t vokie_ble_start(void)
+         if (err != ESP_OK) return err;
+     }
+ #endif
+-    // The worker owns stream open/close as well as all PCM I/O.
+-    if (!s_ok_hold_timer) {
++    for (bsp_btn_t button = BSP_BTN_DOWN; button <= BSP_BTN_OK; ++button) {
++        if (s_button_hold_timers[button]) continue;
+         const esp_timer_create_args_t timer = {
+-            .callback = ok_hold_expired, .name = "ok_hold",
++            .callback = button_hold_expired,
++            .arg = (void *)(intptr_t)button,
++            .name = button_name(button),
+         };
+-        err = esp_timer_create(&timer, &s_ok_hold_timer);
++        err = esp_timer_create(&timer, &s_button_hold_timers[button]);
+         if (err != ESP_OK) return err;
+     }
+     if (bsp_button_init(button_cb, NULL) != ESP_OK) return ESP_FAIL;
+diff --git a/sdkconfig.defaults b/sdkconfig.defaults
+index f88b6af..e59588b 100644
+--- a/sdkconfig.defaults
++++ b/sdkconfig.defaults
+@@ -49,7 +49,7 @@ CONFIG_FREERTOS_IDLE_TIME_BEFORE_SLEEP=3
+ CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION=y
+ CONFIG_BUTTON_PERIOD_TIME_MS=20
+ CONFIG_BUTTON_DEBOUNCE_TICKS=1
+-# Faster OK-button long-press recognition for clear-input (min 500ms in button component).
++# Long-press threshold for edit buttons (minimum 500 ms in button component).
+ CONFIG_BUTTON_LONG_PRESS_TIME_MS=650
+
+ # --- Bluetooth LE / NimBLE ---
+diff --git a/tests/test_button_gesture.c b/tests/test_button_gesture.c
+index b6169d6..d6c745f 100644
+--- a/tests/test_button_gesture.c
++++ b/tests/test_button_gesture.c
+@@ -7,6 +7,30 @@ static button_action_t edge(button_edge_t event, uint32_t at, uint32_t context)
+     return button_gesture_update(&key, event, at, context, 650);
+ }
+
++static void test_passvoice_reports_one_click_or_hold_per_edit_press(void) {
++    const button_edit_host_t idle = {.connection = 1, .passvoice = true};
++    for (int is_ok = 0; is_ok <= 1; ++is_ok) {
++        button_gesture_t gesture = {0};
++        assert(button_edit_update(&gesture, BUTTON_EDGE_PRESS, 0, 650, idle, is_ok)
++                   .action == BUTTON_ACTION_NONE);
++        assert(button_edit_update(&gesture, BUTTON_EDGE_RELEASE, 60, 650, idle, is_ok)
++                   .action == BUTTON_ACTION_CLICK);
++
++        // Hold the next press within the driver's double-click window.
++        assert(button_edit_update(&gesture, BUTTON_EDGE_PRESS, 120, 650, idle, is_ok)
++                   .action == BUTTON_ACTION_NONE);
++        assert(button_edit_update(&gesture, BUTTON_EDGE_LONG, 760, 650, idle, is_ok)
++                   .action == BUTTON_ACTION_NONE);
++        const button_edit_t hold = button_edit_update(&gesture, BUTTON_EDGE_LONG, 770,
++                                                       650, idle, is_ok);
++        assert(hold.action == BUTTON_ACTION_LONG && !hold.cancel_capture);
++        assert(button_edit_update(&gesture, BUTTON_EDGE_LONG, 790, 650, idle, is_ok)
++                   .action == BUTTON_ACTION_NONE);
++        assert(button_edit_update(&gesture, BUTTON_EDGE_RELEASE, 820, 650, idle, is_ok)
++                   .action == BUTTON_ACTION_NONE);
++    }
++}
++
+ static void test_passvoice_ignores_edit_presses_during_capture(void) {
+     const button_edit_host_t recording = {.connection = 1, .passvoice = true, .recording = true};
+     for (int is_ok = 0; is_ok <= 1; ++is_ok) {
+@@ -19,6 +43,9 @@ static void test_passvoice_ignores_edit_presses_during_capture(void) {
+         const button_edit_t hold = button_edit_update(&gesture, BUTTON_EDGE_LONG, 850,
+                                                        650, recording, is_ok);
+         assert(hold.action == BUTTON_ACTION_NONE && !hold.cancel_capture);
++        const button_edit_t release = button_edit_update(&gesture, BUTTON_EDGE_RELEASE, 900,
++                                                          650, recording, is_ok);
++        assert(release.action == BUTTON_ACTION_NONE && !release.cancel_capture);
+     }
+ }
+
+@@ -51,10 +78,25 @@ static void test_legacy_hosts_keep_capture_button_actions(void) {
+     assert(cancel.action == BUTTON_ACTION_CLICK && cancel.cancel_capture);
+ }
+
++static void test_legacy_hosts_receive_only_down_click(void) {
++    const button_edit_host_t legacy = {.connection = 1};
++    button_gesture_t down = {0};
++    (void)button_edit_update(&down, BUTTON_EDGE_PRESS, 0, 650, legacy, false);
++    assert(button_edit_update(&down, BUTTON_EDGE_RELEASE, 60, 650, legacy, false)
++               .action == BUTTON_ACTION_CLICK);
++    (void)button_edit_update(&down, BUTTON_EDGE_PRESS, 120, 650, legacy, false);
++    assert(button_edit_update(&down, BUTTON_EDGE_LONG, 770, 650, legacy, false)
++               .action == BUTTON_ACTION_NONE);
++    assert(button_edit_update(&down, BUTTON_EDGE_RELEASE, 800, 650, legacy, false)
++               .action == BUTTON_ACTION_NONE);
++}
++
+ int main(void) {
++    test_passvoice_reports_one_click_or_hold_per_edit_press();
+     test_passvoice_ignores_edit_presses_during_capture();
+     test_passvoice_only_accepts_a_fresh_press_after_up();
+     test_legacy_hosts_keep_capture_button_actions();
++    test_legacy_hosts_receive_only_down_click();
+     assert(edge(BUTTON_EDGE_RELEASE, 0, 1) == BUTTON_ACTION_NONE);
+     // Each release acts immediately, including a second press inside 180 ms.
+     assert(edge(BUTTON_EDGE_PRESS, 20, 1) == BUTTON_ACTION_NONE);

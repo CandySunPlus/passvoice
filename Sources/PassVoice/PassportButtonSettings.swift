@@ -3,7 +3,8 @@ import Carbon.HIToolbox
 
 final class PassportButtonSettings: NSWindowController, NSWindowDelegate {
     private static let gestures: [(PassportGesture, String)] = [
-        (.downClick, "DOWN 短按"), (.okClick, "OK 短按"), (.okLong, "OK 长按"),
+        (.downClick, "DOWN 短按"), (.downLong, "DOWN 长按"),
+        (.okClick, "OK 短按"), (.okLong, "OK 长按"),
     ]
     private static let actions: [(PassportAction, String)] = [
         (.returnKey, "回车"), (.backspace, "退格"), (.deleteVoiceInput, "删除上一段语音输入"), (.none, "不执行"),

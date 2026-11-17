@@ -335,6 +335,10 @@ struct PassportBridgeTests {
             control(["type": "button_event", "button": "down", "event": "click", "durationMs": 0, "seq": 2])
         }
 
+        func downLong() {
+            control(["type": "button_event", "button": "down", "event": "long", "durationMs": 650])
+        }
+
         func stopVoiceSessionWithQueuedReturn() {
             connect()
             control(["type": "ptt_down", "sessionId": 1])
@@ -453,13 +457,16 @@ extension PassportBridgeTests {
         let harness = Harness(resolveAction: bindings.action(for:))
         harness.connect()
 
+        let shiftReturn = PassportKeystroke(keyCode: 36, modifiers: [.shift])
         bindings.set(.backspace, for: .downClick)
+        bindings.set(.shortcut(shiftReturn, keyName: "↩"), for: .downLong)
         bindings.set(.none, for: .okClick)
         bindings.set(.returnKey, for: .okLong)
         harness.downClick()
+        harness.downLong()
         harness.control(["type": "button_event", "button": "ok", "event": "click"])
         harness.okLong()
-        expectEqual(harness.keys, [.backspace, .returnKey])
+        expectEqual(harness.keys, [.backspace, shiftReturn, .returnKey])
     }
 
     func testSavedShortcutSendsItsKeyAndModifiersAfterReloadingBindings() {
@@ -467,12 +474,12 @@ extension PassportBridgeTests {
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let bindings = PassportButtonBindings(defaults: defaults)
-        bindings.set(.shortcut(PassportKeystroke(keyCode: 36, modifiers: [.shift]), keyName: "↩"), for: .okLong)
+        bindings.set(.shortcut(PassportKeystroke(keyCode: 36, modifiers: [.shift]), keyName: "↩"), for: .downLong)
 
         let reloaded = PassportButtonBindings(defaults: UserDefaults(suiteName: suite)!)
         let harness = Harness(resolveAction: reloaded.action(for:))
         harness.connect()
-        harness.okLong()
+        harness.downLong()
         expectEqual(harness.keys.map(\.keyCode), [36])
         expectEqual(harness.keys.map(\.modifiers), [.shift])
     }
@@ -483,6 +490,7 @@ extension PassportBridgeTests {
         defer { defaults.removePersistentDomain(forName: suite) }
         let bindings = PassportButtonBindings(defaults: defaults)
         bindings.set(.none, for: .downClick)
+        bindings.set(.returnKey, for: .downLong)
         bindings.set(.none, for: .okClick)
         bindings.set(.none, for: .okLong)
         let reloaded = PassportButtonBindings(defaults: UserDefaults(suiteName: suite)!)
@@ -493,10 +501,27 @@ extension PassportBridgeTests {
 
         bindings.restoreDefaults()
         harness.downClick()
+        harness.downLong()
         harness.control(["type": "button_event", "button": "ok", "event": "click"])
         harness.okLong()
         expectEqual(harness.keys, [.returnKey, .backspace])
         expectEqual(harness.input.text, "A")
+    }
+
+    func testDownLongDoesNotSendOrQueueItsBindingDuringCapture() {
+        let harness = Harness(resolveAction: { gesture in
+            gesture == .downLong ? .returnKey : PassportAction.defaultAction(for: gesture)
+        })
+        harness.startVoiceCapture()
+        harness.downLong()
+        expectEqual(harness.keys, [])
+
+        harness.finishVoiceCapture()
+        harness.commitVoiceText("AB", caret: 2)
+        expectEqual(harness.keys, [])
+
+        harness.downLong()
+        expectEqual(harness.keys, [.returnKey])
     }
 
     func testCustomReturnIsIgnoredWhileRecordingAndNeverDeferred() {
@@ -619,5 +644,6 @@ tests.testTaggedReturnDoesNotFollowAnAbortedOrDifferentSession()
 tests.testChangingEachBindingTakesEffectOnTheCurrentBridge()
 tests.testSavedShortcutSendsItsKeyAndModifiersAfterReloadingBindings()
 tests.testRestoringDefaultsClearsAllSavedBindings()
+tests.testDownLongDoesNotSendOrQueueItsBindingDuringCapture()
 tests.testCustomReturnIsIgnoredWhileRecordingAndNeverDeferred()
-print("27 Passport bridge tests passed")
+print("28 Passport bridge tests passed")

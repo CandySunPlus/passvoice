@@ -19,6 +19,34 @@ PassVoice 在 macOS 上接收 AI Passport 的 BLE 语音，把音频送入 Black
 
 构建产物使用本机临时签名。若重建后系统重新要求辅助功能权限，在系统设置里授权新构建的 App。
 
+## Passport 按键设置
+
+从菜单栏打开「按键设置…」。四个手势都可以选择「回车」「退格」「删除上一段语音输入」「不执行」，也可以点击「录入快捷键…」并按下所需组合键。修改立即生效，App 重启后保留，多台 Passport 共用同一套绑定。点击「恢复默认设置」重置四项。
+
+| 按键 | 短按 | 长按（650 ms） |
+| --- | --- | --- |
+| DOWN | 回车 | 不执行 |
+| OK | 退格 | 删除上一段语音输入 |
+
+支持 BLE V1 的旧固件仍可连接，PassVoice 会处理设备已上报的手势。应用下面两份补丁可启用 DOWN 长按及 UP 独占录音控制。录音期间按 DOWN 或 OK 会被忽略。
+
+## 构建配套固件
+
+在 PassVoice 仓库根目录运行以下命令，用 ESP-IDF 5.5.3 构建并验证固件。
+
+```sh
+passvoice_repo=$PWD
+git clone https://github.com/CandySunPlus/vokie-ai-passport-firmware.git ../vokie-ai-passport-firmware
+cd ../vokie-ai-passport-firmware
+git checkout --detach 0e3543259f578f5d5678a58edecca5c8bb81e927
+git am "$passvoice_repo/firmware/0001-passvoice-up-only.patch" \
+  "$passvoice_repo/firmware/0002-passvoice-down-hold.patch"
+. /path/to/esp-idf-v5.5.3/export.sh
+./tools/validate.sh
+```
+
+验证通过后，可用 AI Passport 小程序安装生成的 `build/FoloToy-AI-Passport-full.bin`。 [固件安装与分区约定](https://github.com/CandySunPlus/vokie-ai-passport-firmware/blob/0e3543259f578f5d5678a58edecca5c8bb81e927/docs/development/engineering/ble-recovery-compatibility.zh_CN.md)
+
 ## 命令行调试
 
 1. 在运行 macOS 12 或更新版本的 Apple Silicon Mac 上安装 Xcode Command Line Tools、BlackHole 2ch 和豆包输入法。
@@ -43,10 +71,11 @@ swift build -c release
 
 ## 验收
 
-运行 `./scripts/test` 可验证握手、会话顺序、尾帧和重连逻辑。
+运行 `./scripts/test` 可验证按键绑定、文字确认与删除、握手、会话顺序、尾帧和重连逻辑。
 
 - 对同一设备做两次 `UP → 说话 → UP`。检查文字是否出现在光标处，每次说话的首尾是否完整。
 - 空闲时短按 DOWN，检查是否收到一次回车。用 UP 停止较长的语音后立即短按 DOWN，检查是否先落字，再收到一次回车。在等待期间切换到另一个输入框，检查新输入框没有收到回车。
+- 空闲时短按 OK，检查是否退格一次。长按 DOWN，检查默认不执行。分别修改四个手势的绑定，检查每次按压只执行对应动作一次。录音时重复四种手势，再按 UP 结束，检查录音完整且手势未执行。恢复默认设置后复查四种手势。
 - 在同一个输入框先输入 A，再用 Passport 说 B。等 B 落地后手打 C，长按 OK，检查剩下 A 和 C。再次长按或切换到另一个输入框后长按，检查文字没有变化。
 - 在录音过程中断开设备，连接恢复后再做一次完整语音输入。检查桥接日志是否再次出现 `Passport ready`。
 - 使用 `--manual --verbose` 分开验证音频与快捷键。先用 Mac 的物理快捷键启动豆包语音，再按 UP 开始采集。说完按 UP，看到 `drained` 日志后，再用物理快捷键结束。日志会记录会话 ID 和音频帧序号。
