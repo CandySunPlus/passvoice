@@ -293,6 +293,7 @@ struct PassportBridgeTests {
 
     private final class Harness {
         let now = DispatchTime.now()
+        private let resolveAction: (PassportGesture) -> PassportAction
         private(set) var commands: [String] = []
         private(set) var handshakeHost: String?
         private(set) var outputs: [Playback] = []
@@ -307,6 +308,7 @@ struct PassportBridgeTests {
                 return output
             },
             tapVoiceKey: { [unowned self] in taps += 1 },
+            resolveAction: resolveAction,
             sendKey: { [unowned self] key in keys.append(key) },
             observeVoiceTarget: { [unowned self] in input },
             send: { [unowned self] command in
@@ -317,6 +319,10 @@ struct PassportBridgeTests {
             statusChanged: { [unowned self] status in statuses.append(status) },
             leadTime: .nanoseconds(0)
         )
+
+        init(resolveAction: @escaping (PassportGesture) -> PassportAction = PassportAction.defaultAction) {
+            self.resolveAction = resolveAction
+        }
 
         func connect() {
             event("connected")
@@ -439,6 +445,74 @@ struct PassportBridgeTests {
 }
 
 extension PassportBridgeTests {
+    func testChangingEachBindingTakesEffectOnTheCurrentBridge() {
+        let suite = "PassVoiceTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let bindings = PassportButtonBindings(defaults: defaults)
+        let harness = Harness(resolveAction: bindings.action(for:))
+        harness.connect()
+
+        bindings.set(.backspace, for: .downClick)
+        bindings.set(.none, for: .okClick)
+        bindings.set(.returnKey, for: .okLong)
+        harness.downClick()
+        harness.control(["type": "button_event", "button": "ok", "event": "click"])
+        harness.okLong()
+        expectEqual(harness.keys, [.backspace, .returnKey])
+    }
+
+    func testSavedShortcutSendsItsKeyAndModifiersAfterReloadingBindings() {
+        let suite = "PassVoiceTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let bindings = PassportButtonBindings(defaults: defaults)
+        bindings.set(.shortcut(PassportKeystroke(keyCode: 36, modifiers: [.shift]), keyName: "↩"), for: .okLong)
+
+        let reloaded = PassportButtonBindings(defaults: UserDefaults(suiteName: suite)!)
+        let harness = Harness(resolveAction: reloaded.action(for:))
+        harness.connect()
+        harness.okLong()
+        expectEqual(harness.keys.map(\.keyCode), [36])
+        expectEqual(harness.keys.map(\.modifiers), [.shift])
+    }
+
+    func testRestoringDefaultsClearsAllSavedBindings() {
+        let suite = "PassVoiceTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let bindings = PassportButtonBindings(defaults: defaults)
+        bindings.set(.none, for: .downClick)
+        bindings.set(.none, for: .okClick)
+        bindings.set(.none, for: .okLong)
+        let reloaded = PassportButtonBindings(defaults: UserDefaults(suiteName: suite)!)
+        let harness = Harness(resolveAction: reloaded.action(for:))
+        harness.startVoiceCapture()
+        harness.finishVoiceCapture()
+        harness.commitVoiceText("AB", caret: 2)
+
+        bindings.restoreDefaults()
+        harness.downClick()
+        harness.control(["type": "button_event", "button": "ok", "event": "click"])
+        harness.okLong()
+        expectEqual(harness.keys, [.returnKey, .backspace])
+        expectEqual(harness.input.text, "A")
+    }
+
+    func testCustomReturnIsIgnoredWhileRecordingAndNeverDeferred() {
+        let harness = Harness(resolveAction: { _ in .shortcut(.returnKey, keyName: "↩") })
+        harness.startVoiceCapture()
+        harness.downClick()
+        harness.control(["type": "button_event", "button": "down", "event": "click", "sessionId": 1])
+        harness.finishVoiceCapture()
+        harness.downClick()
+        harness.commitVoiceText("AB", caret: 2)
+        expectEqual(harness.keys, [])
+
+        harness.downClick()
+        expectEqual(harness.keys, [.returnKey])
+    }
+
     func testOkClickSendsOneBackspaceWhileIdle() {
         let harness = Harness()
         harness.connect()
@@ -542,4 +616,8 @@ tests.testOkClickSendsOneBackspaceWhileIdle()
 tests.testOkClickDoesNotRunDuringRecordingOrWaitForVoiceText()
 tests.testReturnPressedJustAfterUpWaitsForTheDelayedPttUpAndVoiceText()
 tests.testTaggedReturnDoesNotFollowAnAbortedOrDifferentSession()
-print("23 Passport bridge tests passed")
+tests.testChangingEachBindingTakesEffectOnTheCurrentBridge()
+tests.testSavedShortcutSendsItsKeyAndModifiersAfterReloadingBindings()
+tests.testRestoringDefaultsClearsAllSavedBindings()
+tests.testCustomReturnIsIgnoredWhileRecordingAndNeverDeferred()
+print("27 Passport bridge tests passed")

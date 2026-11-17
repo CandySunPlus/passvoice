@@ -1,7 +1,8 @@
 import Carbon.HIToolbox
+import CoreGraphics
 import Foundation
 
-enum PassportGesture: Hashable {
+enum PassportGesture: String {
     case downClick, downLong, okClick, okLong
 
     init?(button: String?, event: String?) {
@@ -15,8 +16,9 @@ enum PassportGesture: Hashable {
     }
 }
 
-enum PassportAction: Equatable {
+enum PassportAction: Equatable, Codable {
     case returnKey, backspace, deleteVoiceInput, none
+    case shortcut(PassportKeystroke, keyName: String)
 
     static func defaultAction(for gesture: PassportGesture) -> Self {
         switch gesture {
@@ -28,8 +30,23 @@ enum PassportAction: Equatable {
     }
 }
 
-struct PassportKeystroke: Equatable {
+struct PassportKeystroke: Equatable, Codable {
+    struct Modifiers: OptionSet, Codable {
+        let rawValue: UInt64
+
+        static let control = Self(rawValue: CGEventFlags.maskControl.rawValue)
+        static let option = Self(rawValue: CGEventFlags.maskAlternate.rawValue)
+        static let shift = Self(rawValue: CGEventFlags.maskShift.rawValue)
+        static let command = Self(rawValue: CGEventFlags.maskCommand.rawValue)
+    }
+
     let keyCode: UInt16
+    let modifiers: Modifiers
+
+    init(keyCode: UInt16, modifiers: Modifiers = []) {
+        self.keyCode = keyCode
+        self.modifiers = modifiers
+    }
 
     static let returnKey = Self(keyCode: UInt16(kVK_Return))
     static let backspace = Self(keyCode: UInt16(kVK_Delete))

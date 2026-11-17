@@ -313,16 +313,21 @@ final class PassportBridge {
         guard capture == nil else { return }
         switch action {
         case .returnKey:
-            do { try sendKey(.returnKey) }
-            catch { log("Unable to send Passport keystroke: \(error.localizedDescription)") }
+            sendKeystroke(.returnKey)
         case .backspace:
-            do { try sendKey(.backspace) }
-            catch { log("Unable to send Passport keystroke: \(error.localizedDescription)") }
+            sendKeystroke(.backspace)
+        case let .shortcut(key, _):
+            sendKeystroke(key)
         case .deleteVoiceInput:
             deleteVoiceInput()
         case .none:
             break
         }
+    }
+
+    private func sendKeystroke(_ key: PassportKeystroke) {
+        do { try sendKey(key) }
+        catch { log("Unable to send Passport keystroke: \(error.localizedDescription)") }
     }
 
     private func checkVoiceCommit(now: DispatchTime) {

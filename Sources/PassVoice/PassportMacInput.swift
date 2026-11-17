@@ -13,8 +13,9 @@ enum PassportMacInput {
               let up = CGEvent(keyboardEventSource: nil, virtualKey: key.keyCode, keyDown: false) else {
             throw BridgeError("Unable to create the Passport keystroke")
         }
-        down.flags = []
-        up.flags = []
+        let flags = CGEventFlags(rawValue: key.modifiers.rawValue)
+        down.flags = flags
+        up.flags = flags
         if let processID {
             down.postToPid(processID)
             up.postToPid(processID)

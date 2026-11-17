@@ -21,6 +21,8 @@ private final class PassVoiceMenuBar: NSObject, NSApplicationDelegate, NSMenuDel
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private let menu = NSMenu()
     private let devices = NSMenu()
+    private let bindings = PassportButtonBindings()
+    private lazy var buttonSettings = PassportButtonSettings(bindings: bindings)
     private let connectionItem = NSMenuItem()
     private let connectionProblemItem = NSMenuItem()
     private let deviceMenuItem = NSMenuItem()
@@ -72,6 +74,7 @@ private final class PassVoiceMenuBar: NSObject, NSApplicationDelegate, NSMenuDel
         addAction(disconnectItem, title: "断开并重新扫描", action: #selector(disconnect))
         addAction(retryItem, title: "重试", action: #selector(retry))
         menu.addItem(.separator())
+        addAction(NSMenuItem(), title: "按键设置…", action: #selector(showButtonSettings))
         addAction(permissionItem, title: "授权辅助功能…", action: #selector(requestAccessibility))
         addAction(inputMonitoringItem, title: "授权输入监控…", action: #selector(requestInputMonitoring))
         audioItem.title = "需要 BlackHole 2ch"
@@ -103,6 +106,7 @@ private final class PassVoiceMenuBar: NSObject, NSApplicationDelegate, NSMenuDel
         let helperURL = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/passport-helper")
         let runtime = BridgeRuntime(
             helperURL: helperURL, device: selected,
+            resolveAction: bindings.action(for:),
             log: { message in Self.logger.info("\(message)") },
             onStatus: { [weak self] status in
                 guard let self, !self.restarting, !self.quitting else { return }
@@ -236,6 +240,11 @@ private final class PassVoiceMenuBar: NSObject, NSApplicationDelegate, NSMenuDel
 
     @objc private func retry() {
         restartBridge()
+    }
+
+    @objc private func showButtonSettings() {
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        buttonSettings.showWindow(nil)
     }
 
     @objc private func showConnectionProblem() {
