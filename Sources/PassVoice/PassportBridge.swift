@@ -52,6 +52,25 @@ final class PassportBridge {
         case waiting, awaitingAcknowledgment, ready
     }
 
+    private struct VoiceOrigin {
+        let target: PassportVoiceTarget
+        let baseline: PassportTextState
+
+        func snapshot() -> PassportTextState? {
+            guard target.canConfirmVoiceText else { return nil }
+            return target.snapshot()
+        }
+
+        var isUnchanged: Bool { snapshot() == baseline }
+    }
+
+    private struct VoiceCommitWait {
+        let deadline: DispatchTime
+        var origin: VoiceOrigin?
+        var stopShortcutSent = false
+        var returnQueued = false
+    }
+
     private final class Capture {
         let id: UInt32
         let generation: UUID
@@ -63,6 +82,7 @@ final class PassportBridge {
         var frames = SessionFrames()
         var tail: (final: Int, deadline: DispatchTime)?
         var drainDeadline: DispatchTime?
+        var voiceOrigin: VoiceOrigin?
 
         init(id: UInt32, generation: UUID, playback: AudioPlayback, now: DispatchTime, leadTime: DispatchTimeInterval) {
             self.id = id
@@ -78,6 +98,7 @@ final class PassportBridge {
     private let tapVoiceKey: (() throws -> Void)?
     private let resolveAction: (PassportGesture) -> PassportAction
     private let sendKey: (PassportKeystroke) throws -> Void
+    private let observeVoiceTarget: () -> PassportVoiceTarget?
     private let send: (HelperCommand) -> Void
     private let log: (String) -> Void
     private let statusChanged: (PassportStatus) -> Void
@@ -90,6 +111,7 @@ final class PassportBridge {
     private var discoveredDevices = Set<UUID>()
     private var lastSessionID: UInt32?
     private var capture: Capture?
+    private var voiceCommitWait: VoiceCommitWait?
     private var stopping = false
 
     init(
@@ -97,6 +119,7 @@ final class PassportBridge {
         tapVoiceKey: (() throws -> Void)?,
         resolveAction: @escaping (PassportGesture) -> PassportAction = PassportAction.defaultAction,
         sendKey: @escaping (PassportKeystroke) throws -> Void = { _ in },
+        observeVoiceTarget: @escaping () -> PassportVoiceTarget? = { nil },
         send: @escaping (HelperCommand) -> Void,
         log: @escaping (String) -> Void,
         statusChanged: @escaping (PassportStatus) -> Void = { _ in },
@@ -107,6 +130,7 @@ final class PassportBridge {
         self.tapVoiceKey = tapVoiceKey
         self.resolveAction = resolveAction
         self.sendKey = sendKey
+        self.observeVoiceTarget = observeVoiceTarget
         self.send = send
         self.log = log
         self.statusChanged = statusChanged
@@ -138,6 +162,8 @@ final class PassportBridge {
             helloValidated = false
             readiness = .waiting
             lastSessionID = nil
+            voiceCommitWait = nil
+            capture?.voiceOrigin = nil
             if let message = event.message, event.type == "error" {
                 statusChanged(.unavailable(message))
             } else {
@@ -162,6 +188,7 @@ final class PassportBridge {
     }
 
     func tick(now: DispatchTime = .now()) {
+        checkVoiceCommit(now: now)
         guard let capture else { return }
         if !capture.isPlaying, now >= capture.playAt,
            capture.frames.next > 0 || capture.drainDeadline != nil {
@@ -186,6 +213,7 @@ final class PassportBridge {
 
     func shutdown() {
         stopping = true
+        voiceCommitWait = nil
         if capture != nil {
             if isReady { sendState("error") }
             closeCapture()
@@ -205,6 +233,7 @@ final class PassportBridge {
             sendHandshake(repeatReady: true)
         case "ptt_down":
             guard isReady, capture == nil, let id = control.sessionId, id != lastSessionID else { return }
+            voiceCommitWait = nil
             start(id: id, now: now)
         case "ptt_up":
             guard control.sessionId == capture?.id, let capture, capture.tail == nil,
@@ -212,6 +241,11 @@ final class PassportBridge {
             let finalFrame = final == UInt32.max ? -1 : Int(final)
             log("Passport session \(capture.id) stopped (finalSequence: \(finalFrame))")
             capture.tail = (finalFrame, now + .milliseconds(500))
+            let origin = capture.voiceOrigin
+            voiceCommitWait = VoiceCommitWait(
+                deadline: now + .seconds(5), origin: origin?.isUnchanged == true ? origin : nil
+            )
+            capture.voiceOrigin = nil
             statusChanged(.finishing)
             sendState("processing")
             flush(capture, now: now)
@@ -231,6 +265,10 @@ final class PassportBridge {
     }
 
     private func perform(_ action: PassportAction) {
+        if voiceCommitWait != nil {
+            if action == .returnKey { voiceCommitWait?.returnQueued = true }
+            return
+        }
         guard capture == nil else { return }
         switch action {
         case .returnKey:
@@ -238,6 +276,29 @@ final class PassportBridge {
             catch { log("Unable to send Passport keystroke: \(error.localizedDescription)") }
         case .none:
             break
+        }
+    }
+
+    private func checkVoiceCommit(now: DispatchTime) {
+        guard let wait = voiceCommitWait else { return }
+        guard now < wait.deadline else {
+            voiceCommitWait = nil
+            return
+        }
+        guard wait.stopShortcutSent, let origin = wait.origin else { return }
+        guard let updated = origin.snapshot() else {
+            voiceCommitWait?.origin = nil
+            return
+        }
+        guard updated != origin.baseline else { return }
+        guard origin.baseline.insertedRange(in: updated) != nil else {
+            voiceCommitWait?.origin = nil
+            return
+        }
+        voiceCommitWait = nil
+        if wait.returnQueued {
+            do { try origin.target.send(.returnKey, ifSnapshotIs: updated) }
+            catch { log("Unable to send Passport keystroke: \(error.localizedDescription)") }
         }
     }
 
@@ -250,6 +311,13 @@ final class PassportBridge {
                 guard let self, self.capture?.generation == generation else { return }
                 self.abort("BlackHole stopped during playback")
             }
+            let origin: VoiceOrigin?
+            if tapVoiceKey != nil, let target = observeVoiceTarget(), target.canConfirmVoiceText,
+               let baseline = target.snapshot() {
+                origin = VoiceOrigin(target: target, baseline: baseline)
+            } else {
+                origin = nil
+            }
             do {
                 try tapVoiceKey?()
             } catch {
@@ -259,6 +327,7 @@ final class PassportBridge {
             let setupTime = DispatchTime.now().uptimeNanoseconds - setupStarted.uptimeNanoseconds
             let started = now + .nanoseconds(Int(setupTime))
             let capture = Capture(id: id, generation: generation, playback: playback, now: started, leadTime: leadTime)
+            capture.voiceOrigin = origin
             self.capture = capture
             log("Passport session \(id) started")
             statusChanged(.recording)
@@ -297,7 +366,7 @@ final class PassportBridge {
             try capture.playback.drain { [weak self, weak capture] in
                 guard let self, let capture, self.capture === capture else { return }
                 self.log("Passport session \(capture.id) drained \(capture.frames.next) frames (\(capture.frames.missing) silence replacements)")
-                self.closeCapture()
+                self.closeCapture(endingNormally: capture.tail != nil)
                 if self.isReady {
                     self.sendState("ready")
                     self.statusChanged(.ready)
@@ -316,13 +385,17 @@ final class PassportBridge {
         resetPassport()
     }
 
-    private func closeCapture() {
+    private func closeCapture(endingNormally: Bool = false) {
         guard let capture else { return }
         self.capture = nil
         capture.playback.stop()
+        let canConfirmCommit = endingNormally && voiceCommitWait?.origin?.isUnchanged == true
+        if !canConfirmCommit { voiceCommitWait?.origin = nil }
         do {
             try tapVoiceKey?()
+            voiceCommitWait?.stopShortcutSent = canConfirmCommit
         } catch {
+            voiceCommitWait?.origin = nil
             log("Unable to end Doubao voice input: \(error.localizedDescription)")
         }
     }

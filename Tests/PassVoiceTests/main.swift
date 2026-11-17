@@ -8,6 +8,47 @@ struct PassportBridgeTests {
         expectEqual(harness.keys, [.returnKey])
     }
 
+    func testDownDuringRecordingIsIgnoredAndQueuedReturnsWaitForVoiceText() {
+        let harness = Harness()
+        harness.connect()
+        harness.control(["type": "ptt_down", "sessionId": 1])
+        harness.downClick()
+        expectEqual(harness.keys, [])
+        harness.frame(session: 1, sequence: 0, sample: 12)
+        harness.control(["type": "ptt_up", "sessionId": 1, "finalSequence": 1])
+        harness.downClick()
+        harness.downClick()
+        expectEqual(harness.keys, [])
+
+        harness.frame(session: 1, sequence: 1, sample: 22)
+        expectEqual(harness.keys, [])
+        harness.outputs[0].completeDrain()
+        harness.bridge.tick(now: harness.now + .milliseconds(100))
+        expectEqual(harness.keys, [])
+
+        harness.input.text = "A你好Z"
+        harness.input.selection = NSRange(location: 3, length: 0)
+        harness.bridge.tick(now: harness.now + .milliseconds(200))
+        harness.bridge.tick(now: harness.now + .milliseconds(300))
+        expectEqual(harness.keys, [.returnKey])
+    }
+
+    func testQueuedReturnIsDroppedIfInputChangesBeforeUpStopsRecording() {
+        let harness = Harness()
+        harness.connect()
+        harness.control(["type": "ptt_down", "sessionId": 1])
+        harness.frame(session: 1, sequence: 0, sample: 12)
+        harness.input.text = "A异Z"
+        harness.control(["type": "ptt_up", "sessionId": 1, "finalSequence": 0])
+        harness.downClick()
+        harness.input.text = "A🙂Z"
+        harness.outputs[0].completeDrain()
+        harness.input.text = "A你好Z"
+        harness.input.selection = NSRange(location: 3, length: 0)
+        harness.bridge.tick(now: harness.now + .milliseconds(100))
+        expectEqual(harness.keys, [])
+    }
+
     func testFinishWaitsForInclusiveTailAndBlackHoleDrainBeforeAllowingAnotherSession() {
         let harness = Harness()
         harness.event("connected")
@@ -126,6 +167,7 @@ struct PassportBridgeTests {
         private(set) var outputs: [Playback] = []
         private(set) var taps = 0
         private(set) var keys: [PassportKeystroke] = []
+        lazy var input = VoiceTarget(sendKey: { [unowned self] key in keys.append(key) })
         private(set) var statuses: [PassportStatus] = []
         lazy var bridge = PassportBridge(
             makePlayback: { [unowned self] _ in
@@ -135,6 +177,7 @@ struct PassportBridgeTests {
             },
             tapVoiceKey: { [unowned self] in taps += 1 },
             sendKey: { [unowned self] key in keys.append(key) },
+            observeVoiceTarget: { [unowned self] in input },
             send: { [unowned self] command in commands.append(command.state ?? command.type) },
             log: { _ in },
             statusChanged: { [unowned self] status in statuses.append(status) },
@@ -177,6 +220,24 @@ struct PassportBridgeTests {
         }
     }
 
+    private final class VoiceTarget: PassportVoiceTarget {
+        var text = "A🙂Z"
+        var selection = NSRange(location: 1, length: 2)
+        var canConfirmVoiceText = true
+        var hasFocus = true
+        let sendKey: (PassportKeystroke) -> Void
+
+        init(sendKey: @escaping (PassportKeystroke) -> Void) { self.sendKey = sendKey }
+
+        func snapshot() -> PassportTextState? {
+            hasFocus ? PassportTextState(text: text, selectedRange: selection) : nil
+        }
+
+        func send(_ key: PassportKeystroke, ifSnapshotIs expected: PassportTextState) {
+            if canConfirmVoiceText, snapshot() == expected { sendKey(key) }
+        }
+    }
+
     private final class Playback: AudioPlayback {
         var samples: [Int16] = []
         var completion: (() -> Void)?
@@ -213,8 +274,10 @@ private func expectTrue(_ actual: Bool, line: UInt = #line) {
 
 let tests = PassportBridgeTests()
 tests.testDownClickSendsOneReturnWhileIdle()
+tests.testDownDuringRecordingIsIgnoredAndQueuedReturnsWaitForVoiceText()
+tests.testQueuedReturnIsDroppedIfInputChangesBeforeUpStopsRecording()
 tests.testFinishWaitsForInclusiveTailAndBlackHoleDrainBeforeAllowingAnotherSession()
 tests.testMissingTailFrameIsFilledWithSilenceAfterWaiting()
 tests.testReconnectWaitsForDisconnectedCaptureToDrainAndCanReuseSessionID()
 try tests.testHelperDeliversShortHandshakeBeforeWaitingForReply()
-print("5 Passport bridge tests passed")
+print("7 Passport bridge tests passed")
