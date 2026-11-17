@@ -41,6 +41,10 @@ final class BridgeRuntime {
         let bridge = PassportBridge(
             makePlayback: BlackHolePlayback.init(onInvalidation:),
             tapVoiceKey: manual || device == nil ? nil : VoiceHotkey.tapRightOption,
+            sendKey: { [manual] key in
+                if !manual { try PassportMacInput.send(key) }
+            },
+            observeVoiceTarget: PassportMacInput.observeVoiceTarget,
             send: { [weak self] command in self?.send(command) },
             log: log,
             statusChanged: onStatus,
