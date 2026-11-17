@@ -35,6 +35,7 @@ struct HelperCommand: Encodable {
     let type: String
     var deviceId: UUID?
     var state: String?
+    var host: String?
 }
 
 enum PassportStatus: Equatable {
@@ -112,6 +113,7 @@ final class PassportBridge {
     private var lastSessionID: UInt32?
     private var capture: Capture?
     private var voiceCommitWait: VoiceCommitWait?
+    private var earlyReturn: (id: UInt32, deadline: DispatchTime)?
     private var stopping = false
 
     init(
@@ -163,6 +165,7 @@ final class PassportBridge {
             readiness = .waiting
             lastSessionID = nil
             voiceCommitWait = nil
+            earlyReturn = nil
             capture?.voiceOrigin = nil
             if let message = event.message, event.type == "error" {
                 statusChanged(.unavailable(message))
@@ -188,6 +191,7 @@ final class PassportBridge {
     }
 
     func tick(now: DispatchTime = .now()) {
+        if let earlyReturn, now >= earlyReturn.deadline { self.earlyReturn = nil }
         checkVoiceCommit(now: now)
         guard let capture else { return }
         if !capture.isPlaying, now >= capture.playAt,
@@ -214,6 +218,7 @@ final class PassportBridge {
     func shutdown() {
         stopping = true
         voiceCommitWait = nil
+        earlyReturn = nil
         if capture != nil {
             if isReady { sendState("error") }
             closeCapture()
@@ -234,6 +239,7 @@ final class PassportBridge {
         case "ptt_down":
             guard isReady, capture == nil, let id = control.sessionId, id != lastSessionID else { return }
             voiceCommitWait = nil
+            if earlyReturn?.id != id { earlyReturn = nil }
             start(id: id, now: now)
         case "ptt_up":
             guard control.sessionId == capture?.id, let capture, capture.tail == nil,
@@ -242,8 +248,11 @@ final class PassportBridge {
             log("Passport session \(capture.id) stopped (finalSequence: \(finalFrame))")
             capture.tail = (finalFrame, now + .milliseconds(500))
             let origin = capture.voiceOrigin
+            let queuedReturn = earlyReturn.map { $0.id == capture.id && now < $0.deadline } ?? false
+            earlyReturn = nil
             voiceCommitWait = VoiceCommitWait(
-                deadline: now + .seconds(5), origin: origin?.isUnchanged == true ? origin : nil
+                deadline: now + .seconds(5), origin: origin?.isUnchanged == true ? origin : nil,
+                returnQueued: queuedReturn
             )
             capture.voiceOrigin = nil
             statusChanged(.finishing)
@@ -251,8 +260,14 @@ final class PassportBridge {
             flush(capture, now: now)
         case "button_event":
             guard isReady, let gesture = PassportGesture(button: control.button, event: control.event) else { return }
-            perform(resolveAction(gesture))
+            let action = resolveAction(gesture)
+            if let id = control.sessionId {
+                handleReturnBeforeStop(action, sessionID: id, now: now)
+            } else {
+                perform(action)
+            }
         case "device_error":
+            if earlyReturn?.id == control.sessionId { earlyReturn = nil }
             if let capture, control.sessionId == capture.id {
                 abort("Passport error: \(control.message ?? "unknown")")
             } else if capture == nil, isReady {
@@ -264,6 +279,23 @@ final class PassportBridge {
         }
     }
 
+    private func handleReturnBeforeStop(_ action: PassportAction, sessionID id: UInt32, now: DispatchTime) {
+        guard action == .returnKey, id != 0 else { return }
+        if voiceCommitWait != nil, id == lastSessionID {
+            perform(action)
+            return
+        }
+        // During BLE link setup or final audio transmission, a gesture after
+        // the physical UP can lead the worker's ptt_down or ptt_up notification.
+        // It is eligible only if the same session subsequently ends normally.
+        if let capture {
+            guard capture.id == id, capture.tail == nil, capture.drainDeadline == nil else { return }
+        } else {
+            guard id != lastSessionID else { return }
+        }
+        if earlyReturn?.id != id { earlyReturn = (id, now + .seconds(3)) }
+    }
+
     private func perform(_ action: PassportAction) {
         if voiceCommitWait != nil {
             if action == .returnKey { voiceCommitWait?.returnQueued = true }
@@ -273,6 +305,9 @@ final class PassportBridge {
         switch action {
         case .returnKey:
             do { try sendKey(.returnKey) }
+            catch { log("Unable to send Passport keystroke: \(error.localizedDescription)") }
+        case .backspace:
+            do { try sendKey(.backspace) }
             catch { log("Unable to send Passport keystroke: \(error.localizedDescription)") }
         case .none:
             break
@@ -404,10 +439,11 @@ final class PassportBridge {
         guard subscribed, helloValidated, capture == nil, readiness != .awaitingAcknowledgment,
               !isReady || repeatReady else { return }
         if !isReady { readiness = .awaitingAcknowledgment }
-        send(HelperCommand(type: "host_ready"))
+        send(HelperCommand(type: "host_ready", host: "passvoice"))
     }
 
     private func resetPassport() {
+        earlyReturn = nil
         if isReady {
             sendState("error")
             sendState("ready")
