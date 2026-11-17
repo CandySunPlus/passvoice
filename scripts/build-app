@@ -1,0 +1,34 @@
+#!/bin/sh
+set -eu
+
+cd "$(dirname "$0")/.."
+swift build -c release
+bin_dir=$(swift build -c release --show-bin-path)
+mkdir -p dist
+stage=$(mktemp -d dist/.passvoice-app.XXXXXX)
+trap 'rm -rf "$stage"' EXIT
+
+bundle="$stage/PassVoice.app"
+contents="$bundle/Contents"
+mkdir -p "$contents/MacOS" "$contents/Helpers" "$contents/Resources"
+install -m 755 "$bin_dir/passvoice" "$contents/MacOS/PassVoice"
+install -m 755 "$bin_dir/passport-helper" "$contents/Helpers/passport-helper"
+cp app/Info.plist "$contents/Info.plist"
+cp Sources/PassportHelper/LICENSE "$contents/Resources/FoloToy-LICENSE.txt"
+
+plutil -lint "$contents/Info.plist"
+codesign --force --sign - "$contents/Helpers/passport-helper"
+codesign --force --sign - "$bundle"
+codesign --verify --deep --strict "$bundle"
+
+destination="dist/PassVoice.app"
+if [ -e "$destination" ]; then
+    mv "$destination" "$stage/previous.app"
+fi
+if ! mv "$bundle" "$destination"; then
+    if [ -e "$stage/previous.app" ]; then
+        mv "$stage/previous.app" "$destination"
+    fi
+    exit 1
+fi
+printf '%s\n' "$(pwd)/$destination"

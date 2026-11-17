@@ -1,0 +1,206 @@
+import Foundation
+
+struct PassportBridgeTests {
+    func testFinishWaitsForInclusiveTailAndBlackHoleDrainBeforeAllowingAnotherSession() {
+        let harness = Harness()
+        harness.event("connected")
+        harness.control(Self.hello)
+        expectEqual(harness.commands, [])
+        harness.event("subscribed")
+        harness.control(Self.hello)
+        expectEqual(harness.commands, ["host_ready"])
+        expectEqual(harness.statuses, [.handshaking])
+        harness.control(["type": "ptt_down", "sessionId": 1])
+        expectEqual(harness.outputs.count, 0)
+        harness.event("host_ready_ack")
+        expectEqual(harness.statuses.last, .ready)
+
+        harness.control(["type": "ptt_down", "sessionId": 1])
+        harness.frame(session: 1, sequence: 0, sample: 12)
+        harness.control(["type": "ptt_up", "sessionId": 1, "finalSequence": 2])
+        expectEqual(harness.statuses.last, .finishing)
+        harness.frame(session: 1, sequence: 2, sample: 32)
+        expectEqual(harness.outputs[0].samples, [12])
+        expectNil(harness.outputs[0].completion)
+        harness.frame(session: 1, sequence: 1, sample: 22)
+        expectEqual(harness.outputs[0].samples, [12, 22, 32])
+        expectEqual(harness.commands, ["host_ready", "processing"])
+        expectEqual(harness.taps, 1)
+
+        harness.outputs[0].completeDrain()
+        expectEqual(harness.commands.last, "ready")
+        expectEqual(harness.statuses.last, .ready)
+        expectEqual(harness.taps, 2)
+        expectTrue(harness.outputs[0].stopped)
+
+        harness.control(["type": "ptt_down", "sessionId": 2])
+        harness.control(["type": "ptt_up", "sessionId": 2, "finalSequence": UInt32.max])
+        expectEqual(harness.outputs.count, 2)
+        expectEqual(harness.outputs[1].samples, [])
+        harness.outputs[1].completeDrain()
+        expectEqual(harness.taps, 4)
+        expectEqual(harness.commands.last, "ready")
+    }
+
+    func testMissingTailFrameIsFilledWithSilenceAfterWaiting() {
+        let harness = Harness()
+        harness.connect()
+        harness.control(["type": "ptt_down", "sessionId": 1])
+        harness.frame(session: 1, sequence: 0, sample: 12)
+        harness.control(["type": "ptt_up", "sessionId": 1, "finalSequence": 2])
+        harness.frame(session: 1, sequence: 2, sample: 32)
+        harness.bridge.tick(now: harness.now + .milliseconds(499))
+        expectNil(harness.outputs[0].completion)
+        harness.bridge.tick(now: harness.now + .milliseconds(501))
+        expectEqual(harness.outputs[0].samples, [12, 0, 32])
+        expectNotNil(harness.outputs[0].completion)
+    }
+
+    func testReconnectWaitsForDisconnectedCaptureToDrainAndCanReuseSessionID() {
+        let harness = Harness()
+        harness.connect()
+        harness.control(["type": "ptt_down", "sessionId": 1])
+        harness.frame(session: 1, sequence: 0, sample: 12)
+        harness.event("disconnected")
+        expectEqual(harness.statuses.last, .disconnected)
+        harness.event("connected")
+        harness.event("subscribed")
+        harness.control(Self.hello)
+        expectEqual(harness.commands, ["host_ready"])
+        expectEqual(harness.outputs[0].samples, [12])
+        harness.outputs[0].completeDrain()
+        expectEqual(harness.commands, ["host_ready", "host_ready"])
+        expectEqual(harness.taps, 2)
+        expectEqual(harness.statuses.last, .handshaking)
+        harness.event("host_ready_ack")
+
+        harness.control(["type": "ptt_down", "sessionId": 1])
+        expectEqual(harness.outputs.count, 2)
+        expectEqual(harness.taps, 3)
+    }
+
+    func testHelperDeliversShortHandshakeBeforeWaitingForReply() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let executable = directory.appendingPathComponent("passport-fixture")
+        try """
+        #!/bin/sh
+        printf '%s\\n' '{"type":"subscribed"}'
+        IFS= read -r command
+        case "$command" in
+            *host_ready*) exit 0 ;;
+        esac
+        exit 1
+        """.write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        let helper = HelperProcess(executable: executable)
+        var exitStatus: Int32?
+        try helper.start(onEvent: { event in
+            expectEqual(event.type, "subscribed")
+            try! helper.send(HelperCommand(type: "host_ready"))
+        }, onExit: { exitStatus = $0 })
+        let deadline = Date().addingTimeInterval(3)
+        while exitStatus == nil, Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        helper.stop()
+        expectEqual(exitStatus, 0)
+    }
+
+    private static let hello: [String: Any] = [
+        "type": "hello", "device": "ai-passport", "codec": "ima-adpcm",
+        "sampleRate": 16000, "channels": 1, "frameMs": 20,
+    ]
+
+    private final class Harness {
+        let now = DispatchTime.now()
+        private(set) var commands: [String] = []
+        private(set) var outputs: [Playback] = []
+        private(set) var taps = 0
+        private(set) var statuses: [PassportStatus] = []
+        lazy var bridge = PassportBridge(
+            makePlayback: { [unowned self] _ in
+                let output = Playback()
+                outputs.append(output)
+                return output
+            },
+            tapVoiceKey: { [unowned self] in taps += 1 },
+            send: { [unowned self] command in commands.append(command.state ?? command.type) },
+            log: { _ in },
+            statusChanged: { [unowned self] status in statuses.append(status) },
+            leadTime: .nanoseconds(0)
+        )
+
+        func connect() {
+            event("connected")
+            event("subscribed")
+            control(PassportBridgeTests.hello)
+            event("host_ready_ack")
+        }
+
+        func control(_ fields: [String: Any]) {
+            var payload = fields
+            payload["v"] = 1
+            let data = try! JSONSerialization.data(withJSONObject: payload)
+            event("control", fields: ["payloadBase64": data.base64EncodedString()])
+        }
+
+        func frame(session: UInt32, sequence: UInt32, sample: UInt8) {
+            var bytes = [UInt8](repeating: 0, count: 166)
+            bytes[0] = sample
+            bytes[3] = 64
+            bytes[4] = 1
+            event("audio", fields: [
+                "sessionId": session, "sequence": sequence, "payloadBase64": Data(bytes).base64EncodedString(),
+            ])
+        }
+
+        func event(_ type: String, fields: [String: Any] = [:]) {
+            var object = fields
+            object["type"] = type
+            let data = try! JSONSerialization.data(withJSONObject: object)
+            bridge.receive(try! JSONDecoder().decode(HelperEvent.self, from: data), now: now)
+        }
+    }
+
+    private final class Playback: AudioPlayback {
+        var samples: [Int16] = []
+        var completion: (() -> Void)?
+        var stopped = false
+
+        func enqueue(_ samples: [Int16]) { self.samples.append(samples[0]) }
+        func play() {}
+        func drain(_ completed: @escaping () -> Void) { completion = completed }
+        func stop() { stopped = true }
+
+        func completeDrain() {
+            let callback = completion
+            completion = nil
+            callback?()
+        }
+    }
+}
+
+private func expectEqual<T: Equatable>(_ actual: T, _ expected: T, line: UInt = #line) {
+    precondition(actual == expected, "Line \(line): expected \(expected), got \(actual)")
+}
+
+private func expectNil<T>(_ actual: T?, line: UInt = #line) {
+    precondition(actual == nil, "Line \(line): expected nil")
+}
+
+private func expectNotNil<T>(_ actual: T?, line: UInt = #line) {
+    precondition(actual != nil, "Line \(line): expected a value")
+}
+
+private func expectTrue(_ actual: Bool, line: UInt = #line) {
+    precondition(actual, "Line \(line): expected true")
+}
+
+let tests = PassportBridgeTests()
+tests.testFinishWaitsForInclusiveTailAndBlackHoleDrainBeforeAllowingAnotherSession()
+tests.testMissingTailFrameIsFilledWithSilenceAfterWaiting()
+tests.testReconnectWaitsForDisconnectedCaptureToDrainAndCanReuseSessionID()
+try tests.testHelperDeliversShortHandshakeBeforeWaitingForReply()
+print("4 Passport bridge tests passed")

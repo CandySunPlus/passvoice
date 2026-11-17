@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+cd "$(dirname "$0")/.."
+test_dir=$(mktemp -d)
+trap 'rm -rf "$test_dir"' EXIT
+
+xcrun swiftc Sources/PassVoice/ADPCM.swift Sources/PassVoice/SessionFrames.swift \
+  Sources/PassVoice/PassportBridge.swift Sources/PassVoice/BlackHole.swift \
+  Sources/PassVoice/HelperProcess.swift \
+  Tests/PassVoiceTests/main.swift -o "$test_dir/passvoice-tests"
+"$test_dir/passvoice-tests"
