@@ -49,6 +49,38 @@ struct PassportBridgeTests {
         expectEqual(harness.keys, [])
     }
 
+    func testQueuedReturnIsDroppedAfterLosingAndRegainingFocus() {
+        let harness = Harness()
+        harness.stopVoiceSessionWithQueuedReturn()
+        harness.input.hasFocus = false
+        harness.bridge.tick(now: harness.now + .milliseconds(100))
+
+        harness.input.hasFocus = true
+        harness.input.receiveVoiceText()
+        harness.bridge.tick(now: harness.now + .milliseconds(200))
+        expectEqual(harness.keys, [])
+    }
+
+    func testQueuedReturnIsDroppedWhenAnotherInputCouldHaveInsertedTheText() {
+        let harness = Harness()
+        harness.stopVoiceSessionWithQueuedReturn()
+        harness.input.canConfirmVoiceText = false
+        harness.input.receiveVoiceText()
+        harness.bridge.tick(now: harness.now + .milliseconds(100))
+        expectEqual(harness.keys, [])
+    }
+
+    func testQueuedReturnExpiresBeforeALateCommitAndNewPressWorks() {
+        let harness = Harness()
+        harness.stopVoiceSessionWithQueuedReturn()
+        harness.input.receiveVoiceText()
+        harness.bridge.tick(now: harness.now + .seconds(5))
+        expectEqual(harness.keys, [])
+
+        harness.downClick()
+        expectEqual(harness.keys, [.returnKey])
+    }
+
     func testFinishWaitsForInclusiveTailAndBlackHoleDrainBeforeAllowingAnotherSession() {
         let harness = Harness()
         harness.event("connected")
@@ -200,6 +232,15 @@ struct PassportBridgeTests {
             control(["type": "button_event", "button": "down", "event": "click", "durationMs": 0, "seq": 2])
         }
 
+        func stopVoiceSessionWithQueuedReturn() {
+            connect()
+            control(["type": "ptt_down", "sessionId": 1])
+            frame(session: 1, sequence: 0, sample: 12)
+            control(["type": "ptt_up", "sessionId": 1, "finalSequence": 0])
+            downClick()
+            outputs[0].completeDrain()
+        }
+
         func control(_ fields: [String: Any]) {
             var payload = fields
             payload["v"] = 1
@@ -233,6 +274,11 @@ struct PassportBridgeTests {
         let sendKey: (PassportKeystroke) -> Void
 
         init(sendKey: @escaping (PassportKeystroke) -> Void) { self.sendKey = sendKey }
+
+        func receiveVoiceText() {
+            text = "A你好Z"
+            selection = NSRange(location: 3, length: 0)
+        }
 
         func snapshot() -> PassportTextState? {
             hasFocus ? PassportTextState(text: text, selectedRange: selection) : nil
@@ -345,6 +391,9 @@ let tests = PassportBridgeTests()
 tests.testDownClickSendsOneReturnWhileIdle()
 tests.testDownDuringRecordingIsIgnoredAndQueuedReturnsWaitForVoiceText()
 tests.testQueuedReturnIsDroppedIfInputChangesBeforeUpStopsRecording()
+tests.testQueuedReturnIsDroppedAfterLosingAndRegainingFocus()
+tests.testQueuedReturnIsDroppedWhenAnotherInputCouldHaveInsertedTheText()
+tests.testQueuedReturnExpiresBeforeALateCommitAndNewPressWorks()
 tests.testFinishWaitsForInclusiveTailAndBlackHoleDrainBeforeAllowingAnotherSession()
 tests.testMissingTailFrameIsFilledWithSilenceAfterWaiting()
 tests.testReconnectWaitsForDisconnectedCaptureToDrainAndCanReuseSessionID()
@@ -353,4 +402,4 @@ tests.testOkClickSendsOneBackspaceWhileIdle()
 tests.testOkClickDoesNotRunDuringRecordingOrWaitForVoiceText()
 tests.testReturnPressedJustAfterUpWaitsForTheDelayedPttUpAndVoiceText()
 tests.testTaggedReturnDoesNotFollowAnAbortedOrDifferentSession()
-print("11 Passport bridge tests passed")
+print("14 Passport bridge tests passed")
