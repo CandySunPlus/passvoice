@@ -81,6 +81,103 @@ struct PassportBridgeTests {
         expectEqual(harness.keys, [.returnKey])
     }
 
+    func testOKLongDeletesCommittedVoiceTextAndKeepsLaterTyping() {
+        let harness = Harness()
+        harness.startVoiceCapture()
+        harness.finishVoiceCapture()
+        harness.commitVoiceText("A说🙂", caret: 4)
+        harness.input.setText("A说🙂C", caret: 5)
+        harness.input.canConfirmVoiceText = false
+        harness.okLong()
+        expectEqual(harness.input.text, "AC")
+    }
+
+    func testOKLongKeepsTypingInsertedBeforeTheCommittedRange() {
+        let harness = Harness()
+        harness.startVoiceCapture()
+        harness.finishVoiceCapture()
+        harness.commitVoiceText("AB", caret: 2)
+        harness.input.setText("ACB", caret: 2)
+        harness.okLong()
+        expectEqual(harness.input.text, "AC")
+    }
+
+    func testOKLongSkipsWhenRepeatedTextMakesTheRangeAmbiguous() {
+        let harness = Harness()
+        harness.startVoiceCapture()
+        harness.finishVoiceCapture()
+        harness.commitVoiceText("AB", caret: 2)
+        harness.input.setText("ABB", caret: 3)
+        harness.okLong()
+        expectEqual(harness.input.text, "ABB")
+    }
+
+    func testOKLongSkipsWhenTheVoiceTextMayHaveAlreadyBeenRemoved() {
+        let harness = Harness()
+        harness.startVoiceCapture(text: "B")
+        harness.finishVoiceCapture()
+        harness.commitVoiceText("BB", caret: 2)
+        harness.input.setText("B", caret: 1)
+        harness.okLong()
+        expectEqual(harness.input.text, "B")
+    }
+
+    func testOKLongSkipsTheNewlyFocusedInput() {
+        let harness = Harness()
+        harness.startVoiceCapture()
+        harness.finishVoiceCapture()
+        harness.commitVoiceText("AB", caret: 2)
+        let original = harness.input
+        original.hasFocus = false
+        harness.input = VoiceTarget(sendKey: { _ in })
+        harness.input.setText("AB", caret: 2)
+        harness.okLong()
+        expectEqual(original.text, "AB")
+        expectEqual(harness.input.text, "AB")
+    }
+
+    func testOKLongSkipsWhenTheSelectionCannotBeRead() {
+        let harness = Harness()
+        harness.startVoiceCapture()
+        harness.finishVoiceCapture()
+        harness.commitVoiceText("AB", caret: 2)
+        harness.input.selection = NSRange(location: NSNotFound, length: 0)
+        harness.okLong()
+        expectEqual(harness.input.text, "AB")
+    }
+
+    func testOKLongDoesNotDeleteVoiceTextAgainAfterTheFirstDeletion() {
+        let harness = Harness()
+        harness.startVoiceCapture()
+        harness.finishVoiceCapture()
+        harness.commitVoiceText("AB", caret: 2)
+        harness.okLong()
+        expectEqual(harness.input.text, "A")
+
+        harness.input.setText("AB", caret: 2)
+        harness.okLong()
+        expectEqual(harness.input.text, "AB")
+    }
+
+    func testOKLongDuringRecordingAndCommitWaitDoesNotQueueDeletion() {
+        let harness = Harness()
+        harness.startVoiceCapture()
+        harness.okLong()
+        harness.finishVoiceCapture()
+        harness.okLong()
+        harness.commitVoiceText("AB", caret: 2)
+        expectEqual(harness.input.text, "AB")
+    }
+
+    func testOKLongCanDeleteTheCommitAlsoUsedForQueuedReturn() {
+        let harness = Harness()
+        harness.stopVoiceSessionWithQueuedReturn()
+        harness.commitVoiceText("A你好Z", caret: 3)
+        expectEqual(harness.keys, [.returnKey])
+        harness.okLong()
+        expectEqual(harness.input.text, "AZ")
+    }
+
     func testFinishWaitsForInclusiveTailAndBlackHoleDrainBeforeAllowingAnotherSession() {
         let harness = Harness()
         harness.event("connected")
@@ -236,6 +333,27 @@ struct PassportBridgeTests {
             outputs[0].completeDrain()
         }
 
+        func okLong() {
+            control(["type": "button_event", "button": "ok", "event": "long"])
+        }
+
+        func startVoiceCapture(text: String = "A") {
+            connect()
+            input.setText(text, caret: text.utf16.count)
+            control(["type": "ptt_down", "sessionId": 1])
+            frame(session: 1, sequence: 0, sample: 12)
+        }
+
+        func finishVoiceCapture() {
+            control(["type": "ptt_up", "sessionId": 1, "finalSequence": 0])
+            outputs[0].completeDrain()
+        }
+
+        func commitVoiceText(_ text: String, caret: Int) {
+            input.setText(text, caret: caret)
+            bridge.tick(now: now + .milliseconds(100))
+        }
+
         func control(_ fields: [String: Any]) {
             var payload = fields
             payload["v"] = 1
@@ -277,6 +395,19 @@ struct PassportBridgeTests {
 
         func snapshot() -> PassportTextState? {
             hasFocus ? PassportTextState(text: text, selectedRange: selection) : nil
+        }
+
+        func finishCommitObservation() {}
+
+        func setText(_ text: String, caret: Int) {
+            self.text = text
+            selection = NSRange(location: caret, length: 0)
+        }
+
+        func delete(_ range: NSRange, ifSnapshotIs expected: PassportTextState) {
+            guard snapshot() == expected, let indices = Range(range, in: text) else { return }
+            text.removeSubrange(indices)
+            selection = NSRange(location: range.location, length: 0)
         }
 
         func send(_ key: PassportKeystroke, ifSnapshotIs expected: PassportTextState) {
@@ -325,8 +456,17 @@ tests.testQueuedReturnIsDroppedIfInputChangesBeforeUpStopsRecording()
 tests.testQueuedReturnIsDroppedAfterLosingAndRegainingFocus()
 tests.testQueuedReturnIsDroppedWhenAnotherInputCouldHaveInsertedTheText()
 tests.testQueuedReturnExpiresBeforeALateCommitAndNewPressWorks()
+tests.testOKLongDeletesCommittedVoiceTextAndKeepsLaterTyping()
+tests.testOKLongKeepsTypingInsertedBeforeTheCommittedRange()
+tests.testOKLongSkipsWhenRepeatedTextMakesTheRangeAmbiguous()
+tests.testOKLongSkipsWhenTheVoiceTextMayHaveAlreadyBeenRemoved()
+tests.testOKLongSkipsTheNewlyFocusedInput()
+tests.testOKLongSkipsWhenTheSelectionCannotBeRead()
+tests.testOKLongDoesNotDeleteVoiceTextAgainAfterTheFirstDeletion()
+tests.testOKLongDuringRecordingAndCommitWaitDoesNotQueueDeletion()
+tests.testOKLongCanDeleteTheCommitAlsoUsedForQueuedReturn()
 tests.testFinishWaitsForInclusiveTailAndBlackHoleDrainBeforeAllowingAnotherSession()
 tests.testMissingTailFrameIsFilledWithSilenceAfterWaiting()
 tests.testReconnectWaitsForDisconnectedCaptureToDrainAndCanReuseSessionID()
 try tests.testHelperDeliversShortHandshakeBeforeWaitingForReply()
-print("10 Passport bridge tests passed")
+print("19 Passport bridge tests passed")

@@ -16,10 +16,14 @@ enum PassportGesture: Hashable {
 }
 
 enum PassportAction: Equatable {
-    case returnKey, none
+    case returnKey, deleteVoiceInput, none
 
     static func defaultAction(for gesture: PassportGesture) -> Self {
-        gesture == .downClick ? .returnKey : .none
+        switch gesture {
+        case .downClick: return .returnKey
+        case .okLong: return .deleteVoiceInput
+        case .downLong, .okClick: return .none
+        }
     }
 }
 
@@ -35,6 +39,13 @@ struct PassportTextState: Equatable {
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.selectedRange == rhs.selectedRange && lhs.text.utf16.elementsEqual(rhs.text.utf16)
+    }
+
+    func indices(of range: NSRange) -> Range<String.Index>? {
+        let count = text.utf16.count
+        guard range.location >= 0, range.location <= count, range.length >= 0,
+              range.length <= count - range.location else { return nil }
+        return Range(range, in: text)
     }
 
     // AX selections use UTF-16 offsets. The only accepted edit replaces the
@@ -55,6 +66,35 @@ struct PassportTextState: Equatable {
         guard Range(selectedRange, in: text) != nil, Range(inserted, in: updated.text) != nil else { return nil }
         return inserted
     }
+
+    func retainedRange(_ range: NSRange, in updated: Self) -> NSRange? {
+        guard updated.indices(of: updated.selectedRange) != nil else { return nil }
+        let before = text.utf16
+        let after = updated.text.utf16
+        let beforeLength = before.count
+        let afterLength = after.count
+        let sharedLength = min(beforeLength, afterLength)
+        let prefix = zip(before, after).lazy
+            .prefix { $0.0 == $0.1 }.reduce(0) { length, _ in length + 1 }
+        if prefix == beforeLength, prefix == afterLength { return range }
+        let suffix = zip(before.reversed(), after.reversed()).lazy
+            .prefix { $0.0 == $0.1 }.reduce(0) { length, _ in length + 1 }
+
+        // If the matches overlap, several edit positions can explain the change.
+        // Only keep text that is outside the edit at every such position.
+        let stablePrefix = min(prefix, sharedLength - suffix)
+        let stableSuffix = min(suffix, sharedLength - prefix)
+        let location: Int
+        if NSMaxRange(range) <= stablePrefix {
+            location = range.location
+        } else if beforeLength - range.location <= stableSuffix {
+            location = range.location + (afterLength - beforeLength)
+        } else {
+            return nil
+        }
+        let retained = NSRange(location: location, length: range.length)
+        return updated.indices(of: retained) == nil ? nil : retained
+    }
 }
 
 protocol PassportVoiceTarget: AnyObject {
@@ -66,4 +106,9 @@ protocol PassportVoiceTarget: AnyObject {
 
     // Recheck at delivery, so a deferred keystroke cannot follow the new focus.
     func send(_ key: PassportKeystroke, ifSnapshotIs expected: PassportTextState) throws
+
+    // Stop observing competing input once the commit is known. Keep observing focus.
+    func finishCommitObservation()
+
+    func delete(_ range: NSRange, ifSnapshotIs expected: PassportTextState) throws
 }

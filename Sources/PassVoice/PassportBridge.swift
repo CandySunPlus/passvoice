@@ -71,6 +71,12 @@ final class PassportBridge {
         var returnQueued = false
     }
 
+    private struct CommittedVoiceInput {
+        let target: PassportVoiceTarget
+        let snapshot: PassportTextState
+        let range: NSRange
+    }
+
     private final class Capture {
         let id: UInt32
         let generation: UUID
@@ -112,6 +118,7 @@ final class PassportBridge {
     private var lastSessionID: UInt32?
     private var capture: Capture?
     private var voiceCommitWait: VoiceCommitWait?
+    private var committedVoiceInput: CommittedVoiceInput?
     private var stopping = false
 
     init(
@@ -163,6 +170,7 @@ final class PassportBridge {
             readiness = .waiting
             lastSessionID = nil
             voiceCommitWait = nil
+            committedVoiceInput = nil
             capture?.voiceOrigin = nil
             if let message = event.message, event.type == "error" {
                 statusChanged(.unavailable(message))
@@ -214,6 +222,7 @@ final class PassportBridge {
     func shutdown() {
         stopping = true
         voiceCommitWait = nil
+        committedVoiceInput = nil
         if capture != nil {
             if isReady { sendState("error") }
             closeCapture()
@@ -274,6 +283,8 @@ final class PassportBridge {
         case .returnKey:
             do { try sendKey(.returnKey) }
             catch { log("Unable to send Passport keystroke: \(error.localizedDescription)") }
+        case .deleteVoiceInput:
+            deleteVoiceInput()
         case .none:
             break
         }
@@ -291,15 +302,26 @@ final class PassportBridge {
             return
         }
         guard updated != origin.baseline else { return }
-        guard origin.baseline.insertedRange(in: updated) != nil else {
+        guard let range = origin.baseline.insertedRange(in: updated) else {
             voiceCommitWait?.origin = nil
             return
         }
         voiceCommitWait = nil
+        committedVoiceInput = CommittedVoiceInput(target: origin.target, snapshot: updated, range: range)
         if wait.returnQueued {
             do { try origin.target.send(.returnKey, ifSnapshotIs: updated) }
             catch { log("Unable to send Passport keystroke: \(error.localizedDescription)") }
         }
+        origin.target.finishCommitObservation()
+    }
+
+    private func deleteVoiceInput() {
+        guard let committed = committedVoiceInput else { return }
+        committedVoiceInput = nil
+        guard let current = committed.target.snapshot(),
+              let range = committed.snapshot.retainedRange(committed.range, in: current) else { return }
+        do { try committed.target.delete(range, ifSnapshotIs: current) }
+        catch { log("Unable to delete Passport voice input: \(error.localizedDescription)") }
     }
 
     private func start(id: UInt32, now: DispatchTime) {
@@ -324,6 +346,7 @@ final class PassportBridge {
                 playback.stop()
                 throw error
             }
+            committedVoiceInput = nil
             let setupTime = DispatchTime.now().uptimeNanoseconds - setupStarted.uptimeNanoseconds
             let started = now + .nanoseconds(Int(setupTime))
             let capture = Capture(id: id, generation: generation, playback: playback, now: started, leadTime: leadTime)

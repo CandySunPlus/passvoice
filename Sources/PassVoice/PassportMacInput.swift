@@ -84,17 +84,69 @@ private final class MacVoiceTarget: PassportVoiceTarget {
         let names = [kAXValueAttribute, kAXSelectedTextRangeAttribute] as CFArray
         guard AXUIElementCopyMultipleAttributeValues(element, names, .stopOnError, &attributes) == .success,
               let values = attributes as? [AnyObject], values.count == 2,
-              let text = values[0] as? String, CFGetTypeID(values[1]) == AXValueGetTypeID() else { return nil }
-        var selection = CFRange()
-        let selectedRange = values[1] as! AXValue // Checked the CF type above.
-        guard AXValueGetValue(selectedRange, .cfRange, &selection),
-              selection.location >= 0, selection.length >= 0, stillFocused() else { return nil }
-        return PassportTextState(text: text, selectedRange: NSRange(location: selection.location, length: selection.length))
+              let text = values[0] as? String,
+              let selection = Self.textRange(from: values[1]), stillFocused() else { return nil }
+        return PassportTextState(text: text, selectedRange: selection)
     }
 
     func send(_ key: PassportKeystroke, ifSnapshotIs expected: PassportTextState) throws {
         guard snapshot() == expected, canConfirmVoiceText else { return }
         try PassportMacInput.send(key, to: processID)
+    }
+
+    func delete(_ range: NSRange, ifSnapshotIs expected: PassportTextState) throws {
+        let selectionAttribute = kAXSelectedTextRangeAttribute as CFString
+        let textAttribute = kAXSelectedTextAttribute as CFString
+        guard range.length > 0, let indices = expected.indices(of: range),
+              let originalSelection = Self.rangeValue(expected.selectedRange),
+              let voiceSelection = Self.rangeValue(range),
+              !IsSecureEventInputEnabled(), stillFocused(),
+              isSettable(selectionAttribute), isSettable(textAttribute),
+              hasOnlySelection(expected.selectedRange), snapshot() == expected,
+              !IsSecureEventInputEnabled() else { return }
+
+        let selected = PassportTextState(text: expected.text, selectedRange: range)
+        let changesSelection = range != expected.selectedRange
+        defer {
+            // Restore the selection if the text did not change and we still own this selection.
+            if changesSelection, hasOnlySelection(range), snapshot() == selected, !IsSecureEventInputEnabled() {
+                _ = AXUIElementSetAttributeValue(element, selectionAttribute, originalSelection)
+            }
+        }
+        if changesSelection {
+            guard AXUIElementSetAttributeValue(element, selectionAttribute, voiceSelection) == .success else { return }
+        }
+        guard let selectedText = Self.attribute(kAXSelectedTextAttribute, of: element) as? String,
+              selectedText.utf16.elementsEqual(expected.text[indices].utf16),
+              hasOnlySelection(range), snapshot() == selected, !IsSecureEventInputEnabled() else { return }
+
+        let remaining = expected.text.replacingCharacters(in: indices, with: "")
+        guard AXUIElementSetAttributeValue(element, textAttribute, "" as CFString) == .success,
+              let updated = snapshot(), updated.text.utf16.elementsEqual(remaining.utf16) else {
+            throw BridgeError("The input could not confirm deletion of the selected text")
+        }
+    }
+
+    func finishCommitObservation() {
+        if let inputRunLoopSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), inputRunLoopSource, .commonModes) }
+        if let inputTap { CFMachPortInvalidate(inputTap) }
+        if let inputSourceObserver { DistributedNotificationCenter.default().removeObserver(inputSourceObserver) }
+        inputRunLoopSource = nil
+        inputTap = nil
+        inputSourceObserver = nil
+    }
+
+    private func isSettable(_ attribute: CFString) -> Bool {
+        var settable = DarwinBoolean(false)
+        return AXUIElementIsAttributeSettable(element, attribute, &settable) == .success && settable.boolValue
+    }
+
+    private func hasOnlySelection(_ selection: NSRange) -> Bool {
+        var value: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(element, kAXSelectedTextRangesAttribute as CFString, &value)
+        if result == .attributeUnsupported { return true }
+        guard result == .success, let ranges = value as? [AnyObject], ranges.count == 1 else { return false }
+        return Self.textRange(from: ranges[0]) == selection
     }
 
     private func stillFocused() -> Bool {
@@ -153,12 +205,23 @@ private final class MacVoiceTarget: PassportVoiceTarget {
     }
 
     deinit {
+        finishCommitObservation()
         let runLoop = CFRunLoopGetMain()
         if let focusObserver { CFRunLoopRemoveSource(runLoop, AXObserverGetRunLoopSource(focusObserver), .commonModes) }
-        if let inputRunLoopSource { CFRunLoopRemoveSource(runLoop, inputRunLoopSource, .commonModes) }
-        if let inputTap { CFMachPortInvalidate(inputTap) }
         if let activationObserver { NSWorkspace.shared.notificationCenter.removeObserver(activationObserver) }
-        if let inputSourceObserver { DistributedNotificationCenter.default().removeObserver(inputSourceObserver) }
+    }
+
+    private static func textRange(from value: CFTypeRef) -> NSRange? {
+        guard CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+        var range = CFRange()
+        let axValue = value as! AXValue // Checked the CF type above.
+        guard AXValueGetValue(axValue, .cfRange, &range), range.location >= 0, range.length >= 0 else { return nil }
+        return NSRange(location: range.location, length: range.length)
+    }
+
+    private static func rangeValue(_ range: NSRange) -> AXValue? {
+        var value = CFRange(location: range.location, length: range.length)
+        return AXValueCreate(.cfRange, &value)
     }
 
     private static func doubaoIsSelected() -> Bool {
