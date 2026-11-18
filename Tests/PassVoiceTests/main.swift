@@ -8,6 +8,68 @@ struct PassportBridgeTests {
         expectEqual(harness.keys, [.returnKey])
     }
 
+    func testOneDownAfterUpSendsReturnOnceCodexVoiceSettles() {
+        let harness = Harness()
+        harness.input.canDeleteAttributedVoiceText = true
+        harness.input.canSettleVoiceWithoutCompositionState = true
+        harness.startVoiceCapture()
+        harness.finishVoiceCapture()
+        harness.downClick()
+        harness.input.updateValue("A语音", caret: 3)
+        harness.advance(by: 100)
+        expectEqual(harness.keys, [])
+        harness.advance(by: 1100)
+        expectEqual(harness.keys, [.returnKey])
+    }
+
+    func testFirstSessionTaggedDownCanArriveAfterTextCommit() {
+        let harness = Harness()
+        harness.startVoiceCapture()
+        harness.finishVoiceCapture()
+        harness.input.composition = .clear
+        harness.commitVoiceText("AB", caret: 2)
+        let down: [String: Any] = ["type": "button_event", "button": "down", "event": "click", "sessionId": 1]
+        harness.control(down)
+        harness.control(down)
+        expectEqual(harness.keys, [.returnKey])
+    }
+
+    func testQueuedCodexReturnWaitsForTheLatestRevisionAndKeepsItsFocus() {
+        for losesFocus in [false, true] {
+            let harness = Harness()
+            harness.input.canDeleteAttributedVoiceText = true
+            harness.input.canSettleVoiceWithoutCompositionState = true
+            harness.startVoiceCapture()
+            harness.finishVoiceCapture()
+            harness.downClick()
+            harness.downClick()
+            harness.input.updateValue("A临时", caret: 3)
+            harness.advance(by: 100)
+            harness.input.updateValue("A最终语音", caret: 5)
+            harness.advance(by: 600)
+            harness.advance(by: 500)
+            expectEqual(harness.keys, [])
+            if losesFocus { harness.input.hasFocus = false }
+            harness.advance(by: 600)
+            expectEqual(harness.keys, losesFocus ? [] : [.returnKey])
+        }
+    }
+
+    func testCodexVoiceRemainsDeletableWhenItRevisesAfterTheDownWait() {
+        let harness = Harness()
+        harness.input.canDeleteAttributedVoiceText = true
+        harness.input.canSettleVoiceWithoutCompositionState = true
+        harness.startVoiceCapture()
+        harness.finishVoiceCapture()
+        harness.input.updateValue("A临时", caret: 3)
+        harness.advance(by: 100)
+        harness.advance(by: 1100)
+        harness.input.updateValue("A最终语音", caret: 5)
+        harness.okLong()
+        expectEqual(harness.input.text, "A")
+        expectEqual(harness.keys, [])
+    }
+
     func testDownDuringRecordingIsIgnoredAndQueuedReturnsWaitForVoiceText() {
         let harness = Harness()
         harness.connect()
@@ -746,6 +808,7 @@ struct PassportBridgeTests {
         var selection = NSRange(location: 1, length: 2)
         var canConfirmVoiceText = true
         var canDeleteAttributedVoiceText = false
+        var canSettleVoiceWithoutCompositionState = false
         var composition: PassportTextComposition = .unknown
         var readOnlyWidget: String?
         var hasFocus = true
@@ -1039,6 +1102,10 @@ private func expectTrue(_ actual: Bool, line: UInt = #line) {
 
 let tests = PassportBridgeTests()
 tests.testDownClickSendsOneReturnWhileIdle()
+tests.testOneDownAfterUpSendsReturnOnceCodexVoiceSettles()
+tests.testFirstSessionTaggedDownCanArriveAfterTextCommit()
+tests.testQueuedCodexReturnWaitsForTheLatestRevisionAndKeepsItsFocus()
+tests.testCodexVoiceRemainsDeletableWhenItRevisesAfterTheDownWait()
 tests.testDownDuringRecordingIsIgnoredAndQueuedReturnsWaitForVoiceText()
 tests.testQueuedReturnIsDroppedIfInputChangesBeforeUpStopsRecording()
 tests.testQueuedReturnIsDroppedAfterLosingAndRegainingFocus()
@@ -1091,4 +1158,4 @@ tests.testSavedShortcutSendsItsKeyAndModifiersAfterReloadingBindings()
 tests.testRestoringDefaultsClearsAllSavedBindings()
 tests.testDownLongDoesNotSendOrQueueItsBindingDuringCapture()
 tests.testCustomReturnIsIgnoredWhileRecordingAndNeverDeferred()
-print("53 Passport bridge tests passed")
+print("57 Passport bridge tests passed")

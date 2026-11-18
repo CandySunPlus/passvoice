@@ -80,6 +80,7 @@ private final class MacVoiceTarget: PassportVoiceTarget {
     private let processID: pid_t
     private let isCodexEditor: Bool
     let canDeleteAttributedVoiceText: Bool
+    var canSettleVoiceWithoutCompositionState: Bool { isCodexEditor }
     private var lostFocus = false
     private var otherInput = false
     private var inputRevision: UInt64 = 0

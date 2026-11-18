@@ -153,6 +153,7 @@ protocol PassportVoiceTarget: AnyObject {
     var canConfirmVoiceText: Bool { get }
     var isFocused: Bool { get }
     var canDeleteAttributedVoiceText: Bool { get }
+    var canSettleVoiceWithoutCompositionState: Bool { get }
 
     // Nil after any loss of focus or if the input cannot be read.
     func snapshot() -> PassportTextState?
@@ -174,4 +175,5 @@ protocol PassportVoiceTarget: AnyObject {
 
 extension PassportVoiceTarget {
     var canDeleteAttributedVoiceText: Bool { false }
+    var canSettleVoiceWithoutCompositionState: Bool { false }
 }

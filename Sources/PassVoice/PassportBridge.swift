@@ -99,6 +99,7 @@ final class PassportBridge {
         var stopShortcutSent = false
         var returnQueued = false
         var tracksAttributedVoice = false
+        var settlingVoice: (snapshot: PassportTextState, until: DispatchTime)?
         var cancellation: Cancellation?
     }
 
@@ -117,6 +118,7 @@ final class PassportBridge {
         private enum PendingEdit { case typing, typingConfirmation, other }
 
         let target: PassportVoiceTarget
+        let sessionID: UInt32
         private(set) var snapshot: PassportTextState
         private(set) var range: NSRange
         private var pendingEdit: PendingEdit?
@@ -124,8 +126,10 @@ final class PassportBridge {
         private var voiceBaseline: PassportTextState?
         var inputPending: Bool { pendingEdit != nil }
 
-        init(target: PassportVoiceTarget, snapshot: PassportTextState, range: NSRange, voiceBaseline: PassportTextState?) {
+        init(target: PassportVoiceTarget, sessionID: UInt32, snapshot: PassportTextState, range: NSRange,
+             voiceBaseline: PassportTextState?) {
             self.target = target
+            self.sessionID = sessionID
             self.snapshot = snapshot
             self.range = range
             self.voiceBaseline = voiceBaseline
@@ -259,6 +263,7 @@ final class PassportBridge {
     private var voiceCommitWait: VoiceCommitWait?
     private var unresolvedCommitTarget: PassportVoiceTarget?
     private var earlyReturn: EarlyReturn?
+    private var returnedAfterSession: UInt32?
     private var committedVoiceInput: CommittedVoiceInput?
     private var stopping = false
 
@@ -310,6 +315,7 @@ final class PassportBridge {
             helloValidated = false
             readiness = .waiting
             lastSessionID = nil
+            returnedAfterSession = nil
             voiceCommitWait = nil
             unresolvedCommitTarget = nil
             earlyReturn = nil
@@ -452,9 +458,16 @@ final class PassportBridge {
 
     private func handleReturnBeforeStop(_ action: PassportAction, sessionID id: UInt32, now: DispatchTime) {
         guard action == .returnKey, id != 0 else { return }
-        if voiceCommitWait != nil, id == lastSessionID {
-            perform(action)
-            return
+        if id == lastSessionID {
+            if voiceCommitWait != nil {
+                perform(action)
+                return
+            }
+            if capture == nil, unresolvedCommitTarget == nil, let committed = committedVoiceInput,
+               committed.sessionID == id, !committed.inputPending {
+                sendSessionReturn(to: committed.target, ifSnapshotIs: committed.snapshot)
+                return
+            }
         }
         // During BLE link setup or final audio transmission, a gesture after
         // the physical UP can lead the worker's ptt_down or ptt_up notification.
@@ -500,6 +513,13 @@ final class PassportBridge {
         catch { log("Unable to send Passport keystroke: \(error.localizedDescription)") }
     }
 
+    private func sendSessionReturn(to target: PassportVoiceTarget, ifSnapshotIs expected: PassportTextState) {
+        guard let id = lastSessionID, returnedAfterSession != id else { return }
+        returnedAfterSession = id
+        do { try target.send(.returnKey, ifSnapshotIs: expected) }
+        catch { log("Unable to send Passport keystroke: \(error.localizedDescription)") }
+    }
+
     private func checkVoiceCommit(now: DispatchTime) {
         guard let wait = voiceCommitWait else { return }
         guard now < wait.deadline else {
@@ -508,7 +528,14 @@ final class PassportBridge {
                 return
             }
             voiceCommitWait = nil
-            if wait.tracksAttributedVoice { committedVoiceInput?.finishAttribution() }
+            if wait.tracksAttributedVoice {
+                if let settling = wait.settlingVoice, now >= settling.until,
+                   let current = wait.origin?.snapshot(), current == settling.snapshot,
+                   committedVoiceInput?.snapshot == current {
+                    unresolvedCommitTarget = nil
+                }
+                committedVoiceInput?.finishAttribution()
+            }
             if let target = unresolvedCommitTarget, committedVoiceInput?.target !== target {
                 target.stopMonitoringInput()
             }
@@ -518,7 +545,11 @@ final class PassportBridge {
             checkCancellation(wait, progress: cancellation, now: now)
             return
         }
-        guard wait.stopShortcutSent, !wait.tracksAttributedVoice, let origin = wait.origin else { return }
+        guard wait.stopShortcutSent, let origin = wait.origin else { return }
+        if wait.tracksAttributedVoice {
+            checkAttributedVoiceCommit(wait, origin: origin, now: now)
+            return
+        }
         guard let updated = origin.snapshot() else {
             if !origin.canWaitForAttributedInsertion { voiceCommitWait?.origin = nil }
             return
@@ -529,23 +560,51 @@ final class PassportBridge {
             return
         }
         if updated.composition == .unknown, origin.target.canDeleteAttributedVoiceText {
-            // The stop shortcut and untouched baseline establish attribution,
-            // but an editor without marked ranges cannot confirm a commit for Return.
-            voiceCommitWait?.tracksAttributedVoice = trackVoiceInput(
-                in: origin.target, snapshot: updated, range: range, voiceBaseline: origin.baseline
-            )
+            if trackVoiceInput(in: origin.target, snapshot: updated, range: range, voiceBaseline: origin.baseline) {
+                voiceCommitWait?.tracksAttributedVoice = true
+                checkAttributedVoiceCommit(wait, origin: origin, now: now)
+            }
             return
         }
         // AX values can contain live IME text. A live candidate needs an explicit
         // clear composition state after the stop shortcut, even if its text is unchanged.
         guard updated.composition != .composing,
               !origin.requiresCompositionConfirmation || updated.composition == .clear else { return }
+        trackVoiceInput(in: origin.target, snapshot: updated, range: range)
+        finishVoiceCommit(wait, target: origin.target, snapshot: updated)
+    }
+
+    private func checkAttributedVoiceCommit(_ wait: VoiceCommitWait, origin: VoiceOrigin, now: DispatchTime) {
+        guard wait.returnQueued || origin.target.canSettleVoiceWithoutCompositionState else { return }
+        guard let committed = committedVoiceInput, !committed.inputPending,
+              let current = origin.snapshot(), current == committed.snapshot else {
+            voiceCommitWait?.settlingVoice = nil
+            return
+        }
+        if current.composition != .clear {
+            // Codex does not expose marked text. Wait for an unchanged
+            // attributed insertion and a caret at its end after the stop.
+            guard current.composition == .unknown, origin.target.canSettleVoiceWithoutCompositionState,
+                  current.selectedRange.location == NSMaxRange(committed.range) else {
+                voiceCommitWait?.settlingVoice = nil
+                return
+            }
+            guard let settling = wait.settlingVoice, settling.snapshot == current else {
+                voiceCommitWait?.settlingVoice = (current, now + .seconds(1))
+                return
+            }
+            guard now >= settling.until else { return }
+            guard wait.returnQueued else { return }
+        }
+        committed.finishAttribution()
+        finishVoiceCommit(wait, target: origin.target, snapshot: current)
+    }
+
+    private func finishVoiceCommit(_ wait: VoiceCommitWait, target: PassportVoiceTarget, snapshot: PassportTextState) {
         voiceCommitWait = nil
         unresolvedCommitTarget = nil
-        trackVoiceInput(in: origin.target, snapshot: updated, range: range)
         if wait.returnQueued {
-            do { try origin.target.send(.returnKey, ifSnapshotIs: updated) }
-            catch { log("Unable to send Passport keystroke: \(error.localizedDescription)") }
+            sendSessionReturn(to: target, ifSnapshotIs: snapshot)
         }
     }
 
@@ -595,7 +654,9 @@ final class PassportBridge {
     @discardableResult
     private func trackVoiceInput(in target: PassportVoiceTarget, snapshot: PassportTextState, range: NSRange,
                                  voiceBaseline: PassportTextState? = nil) -> Bool {
-        let committed = CommittedVoiceInput(target: target, snapshot: snapshot, range: range, voiceBaseline: voiceBaseline)
+        guard let id = lastSessionID else { return false }
+        let committed = CommittedVoiceInput(target: target, sessionID: id, snapshot: snapshot, range: range,
+                                            voiceBaseline: voiceBaseline)
         guard target.monitorEdits(ifSnapshotIs: snapshot, onEdit: { [weak self, weak committed] observation in
             guard let self, let committed, self.committedVoiceInput === committed else { return }
             if !committed.apply(observation) { self.committedVoiceInput = nil }
@@ -624,6 +685,7 @@ final class PassportBridge {
 
     private func start(id: UInt32, canAttribute: Bool, now: DispatchTime) {
         lastSessionID = id
+        returnedAfterSession = nil
         let generation = UUID()
         let setupStarted = DispatchTime.now()
         do {
