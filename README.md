@@ -17,7 +17,9 @@ PassVoice 在 macOS 上接收 AI Passport 的 BLE 语音，把音频送入 Black
 ./scripts/build-app
 ```
 
-构建默认使用临时签名。要让本机更新沿用辅助功能和输入监控授权，在登录钥匙串配置代码签名身份，并把证书指纹或签名身份名称写入 `app/.local-signing-identity`。构建会用该身份签名 App 和蓝牙辅助进程。用 `PASSVOICE_SIGN_IDENTITY` 可为单次构建指定身份。首次从临时签名切换到固定签名后，在系统设置里重新授权一次。
+构建默认使用 `app/signing-identity` 中的证书指纹，为 App 和蓝牙辅助进程签名。换 Mac 时，将含对应证书和私钥的 `.p12` 导入登录钥匙串，再运行构建命令。可以用 `security find-identity -v -p codesigning` 核对指纹。脚本查不到该身份时，会在编译前提示导入。
+
+如需覆盖默认身份，可在本机的 `app/.local-signing-identity` 中填写证书指纹或签名身份名称，也可以用 `PASSVOICE_SIGN_IDENTITY` 为单次构建指定身份。仅做临时构建时，运行 `PASSVOICE_SIGN_IDENTITY=- ./scripts/build-app`。首次从临时签名切换到固定签名后，在系统设置里重新授权一次。
 
 ## Passport 按键设置
 

@@ -7,10 +7,22 @@ if [ "${PASSVOICE_SIGN_IDENTITY+x}" = x ]; then
 elif [ -f app/.local-signing-identity ]; then
     signing_identity=$(cat app/.local-signing-identity)
 else
-    signing_identity=-
+    signing_identity=$(cat app/signing-identity)
 fi
 if [ -z "$signing_identity" ]; then
     printf '%s\n' 'PassVoice signing identity is empty.' >&2
+    exit 1
+fi
+if printf '%s\n' "$signing_identity" | grep -Eq '^[0-9a-fA-F]{40}$' &&
+    ! security find-identity -v -p codesigning |
+        awk -v fingerprint="$signing_identity" '
+            toupper($2) == toupper(fingerprint) { found = 1 }
+            END { exit !found }
+        '
+then
+    printf 'PassVoice signing identity %s is unavailable.\n' "$signing_identity" >&2
+    printf '%s\n' 'Import the matching .p12 (certificate and private key) into your login keychain and check its code signing trust settings.' >&2
+    printf '%s\n' 'For a one-off ad hoc build, run PASSVOICE_SIGN_IDENTITY=- ./scripts/build-app.' >&2
     exit 1
 fi
 
