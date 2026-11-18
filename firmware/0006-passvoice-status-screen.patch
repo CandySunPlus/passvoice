@@ -1,0 +1,353 @@
+From 37cfe25aee41d174901ef5ee18abf1d724bd2c72 Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Wed, 18 Nov 2026 13:15:55 +0800
+Subject: [PATCH] feat(ui): show the PassVoice status screen
+
+Add the PassVoice mark and large capture status. Retain the physical-key callouts and their timing, and use DOWN and OK key names for Mac-managed bindings.
+---
+ docs/CHANGELOG.md       |   2 +
+ docs/CHANGELOG.zh_CN.md |   2 +
+ main/CMakeLists.txt     |   3 +-
+ main/ui_status.c        | 207 ++++++++++++++++++++++++----------------
+ sdkconfig.defaults      |   1 +
+ 5 files changed, 130 insertions(+), 85 deletions(-)
+
+diff --git a/docs/CHANGELOG.md b/docs/CHANGELOG.md
+index 81abf74..bae8c9a 100644
+--- a/docs/CHANGELOG.md
++++ b/docs/CHANGELOG.md
+@@ -6,6 +6,8 @@
+ 
+ ## Unreleased
+ 
++- Show the PassVoice waveform and text cursor above a large capture status. Briefly indicate the pressed physical key beside the icon, with a leader line to its position on the right edge.
++
+ - Wait up to 3 seconds for the audio link to recover from idle, accommodating the measured 1531 ms Mac connection update so the first UP can start capture. Preserve cancellation and the bounded failure path.
+ 
+ - Avoid redundant BLE idle updates when the negotiated link already uses 90–120 ms. After edit-button activity, the next UP can restore the 15 ms audio interval without being blocked by a redundant 40-second connection update. Track only accepted idle updates while preserving a bounded audio-start deadline and low-power standby policy.
+diff --git a/docs/CHANGELOG.zh_CN.md b/docs/CHANGELOG.zh_CN.md
+index 4baa6e7..2f6d5e8 100644
+--- a/docs/CHANGELOG.zh_CN.md
++++ b/docs/CHANGELOG.zh_CN.md
+@@ -6,6 +6,8 @@
+ 
+ ## Unreleased
+ 
++- 用 PassVoice 声波和文字光标搭配大字显示录音状态。按下实体键时，图标右侧短暂显示对应提示，并用细线指向屏幕右侧的实体键位置。
++
+ - 从空闲恢复音频连接时最多等待 3 秒，容纳实测耗时 1531 ms 的 Mac 连接更新，让首次 UP 即可开始采集。保留取消和有界失败行为。
+ 
+ - 当协商后的 BLE 间隔已为 90–120 ms 时，不重复请求空闲更新。编辑按键活动后，下次 UP 可恢复 15 ms 音频间隔，避免被冗余的 40 秒连接更新阻塞。只跟踪实际接受的空闲更新，保留有界音频启动期限及低功耗待机策略。
+diff --git a/main/CMakeLists.txt b/main/CMakeLists.txt
+index 6ffb639..734e544 100644
+--- a/main/CMakeLists.txt
++++ b/main/CMakeLists.txt
+@@ -1,8 +1,7 @@
+ idf_component_register(
+     SRCS "main.c" "vokie_ble.c" "ble_tx_retry.c" "ble_capture_end.c" "ble_audio_mbuf.c" "ble_audio_link.c" "device_diag.c" "diag_journal.c"
+          "ui_status.c" "boot_sound.c" "usb_standby.c"
+-         "../assets/fonts/vokie_title_barlow_condensed_bold_22.c"
+-    INCLUDE_DIRS "." "../assets/fonts"
++    INCLUDE_DIRS "."
+     REQUIRES bsp bt esp_event esp_driver_usb_serial_jtag esp_hw_support esp_netif esp_timer esp_wifi nvs_flash json esp_pm esp_partition esp_app_format
+ )
+ 
+diff --git a/main/ui_status.c b/main/ui_status.c
+index 192d3d7..0cc863c 100644
+--- a/main/ui_status.c
++++ b/main/ui_status.c
+@@ -10,36 +10,28 @@
+ #include "lvgl.h"
+ #include "ui_battery.h"
+ #include "ui_idle.h"
+-#include "vokie_symbol_asset.h"
+-#include "vokie_title_font.h"
+ #include <stdio.h>
+ #include <string.h>
+ 
+-#define UI_BG 0x0B1018
+-#define UI_PANEL 0x151D28
+-#define UI_WHITE 0xF6F8FC
+-#define UI_INK 0x202A38
+-#define UI_MUTED 0x7F8B9E
+-#define UI_BATTERY_MUTED 0x646C78
+-#define UI_BLUE 0x67D8FF
+-#define UI_GREEN 0x78E0A4
+-#define UI_ORANGE 0xFFB454
+-#define UI_RED 0xFF7180
+-#define UI_CONTENT_X 0
+-#define UI_CONTENT_W BSP_LCD_W
+-#define UI_HEADER_X 0
+-#define UI_HEADER_W BSP_LCD_W
+-#define UI_HEADER_Y 245
++#define UI_BG 0x0D1B2F
++#define UI_PANEL 0x1C3451
++#define UI_WHITE 0xF3FFFB
++#define UI_MUTED 0xB2C7D6
++#define UI_BATTERY_MUTED 0x90A6B8
++#define UI_BLUE 0x99CCFF
++#define UI_GREEN 0x73E9C9
++#define UI_ORANGE 0xFFC788
++#define UI_RED 0xFF9189
++#define UI_CONTENT_X 16
++#define UI_CONTENT_W (BSP_LCD_W - 2 * UI_CONTENT_X)
+ #define UI_BATTERY_W 66
+ #define UI_BATTERY_RIGHT_MARGIN 16
+ #define UI_BATTERY_X (BSP_LCD_W - UI_BATTERY_RIGHT_MARGIN - UI_BATTERY_W)
+ #define UI_BATTERY_Y 21
+-#define UI_LOGO_SIZE 64
+-#define UI_LOGO_X ((BSP_LCD_W - UI_LOGO_SIZE) / 2)
+-// Center the visible 55 px artwork on the SEND row at y=159.
+-#define UI_LOGO_Y 132
+-#define UI_STATE_Y 53
+-#define UI_DETAIL_Y 86
++#define UI_LOGO_X 67
++#define UI_LOGO_Y 113
++#define UI_STATE_Y 215
++#define UI_DETAIL_Y 253
+ #define UI_HINT_FADE_IN_MS 160
+ #define UI_HINT_FADE_OUT_MS 220
+ #define UI_HINT_GROUP_X 178
+@@ -51,6 +43,9 @@
+ static lv_obj_t *s_screen;
+ static lv_obj_t *s_state;
+ static lv_obj_t *s_detail;
++static lv_obj_t *s_waveform[4];
++static lv_obj_t *s_footer_key;
++static lv_obj_t *s_footer_hint;
+ static lv_obj_t *s_button_hints;
+ static lv_obj_t *s_hint_panel;
+ static lv_obj_t *s_hint_lines[3];
+@@ -113,57 +108,53 @@ static void set_backlight(uint8_t percent)
+     bsp_display_backlight(percent);
+ }
+ 
+-static const char *state_name(ui_status_state_t state)
++static const char *state_name(const ui_idle_t *status)
+ {
+-    switch (state) {
+-    case UI_STATUS_RECORDING: return "LISTENING";
+-    case UI_STATUS_PROCESSING: return "THINKING";
+-    case UI_STATUS_SUCCESS: return "SENT";
+-    case UI_STATUS_ERROR: return "ERROR";
+-    case UI_STATUS_DISCONNECTED: return "OFFLINE";
+-    case UI_STATUS_STARTING: return "STARTING";
+-    default: return "READY";
++    switch (status->state) {
++    case UI_STATUS_RECORDING:
++        return strcmp(status->message, "Connecting audio") == 0 ? "Starting" : "Listening";
++    case UI_STATUS_PROCESSING: return "Finishing";
++    case UI_STATUS_SUCCESS: return "Sent";
++    case UI_STATUS_ERROR:
++        return strncmp(status->message, "Slow BLE", sizeof("Slow BLE") - 1) == 0 ? "Link slow" : "Error";
++    case UI_STATUS_DISCONNECTED: return "Offline";
++    case UI_STATUS_STARTING: return "Connecting";
++    default: return "Ready";
+     }
+ }
+ 
+ static uint32_t state_color(ui_status_state_t state)
+ {
+     switch (state) {
+-    case UI_STATUS_RECORDING: return UI_ORANGE;
++    case UI_STATUS_RECORDING: return UI_RED;
+     case UI_STATUS_PROCESSING: return UI_BLUE;
+     case UI_STATUS_SUCCESS: return UI_GREEN;
+-    case UI_STATUS_ERROR: return UI_RED;
++    case UI_STATUS_ERROR: return UI_ORANGE;
+     case UI_STATUS_DISCONNECTED: return UI_MUTED;
+-    default: return UI_BLUE;
++    case UI_STATUS_STARTING: return UI_BLUE;
++    default: return UI_GREEN;
+     }
+ }
+ 
+-static const lv_image_dsc_t s_vokie_symbol = {
+-    .header = {
+-        .magic = LV_IMAGE_HEADER_MAGIC,
+-        .cf = LV_COLOR_FORMAT_NATIVE,
+-        .w = UI_LOGO_SIZE,
+-        .h = UI_LOGO_SIZE,
+-        .stride = UI_LOGO_SIZE * 2,
+-    },
+-    .data_size = sizeof(s_vokie_symbol_data),
+-    .data = s_vokie_symbol_data,
+-};
+-
+-static void draw_vokie(void)
++static void draw_passvoice(void)
+ {
+-    // This is a 64x64 RGB565 raster of the official vokie-symbol.svg path.
+-    // It is placed directly on the screen: no tile, border, or distortion.
+-    lv_obj_t *mark = lv_image_create(s_screen);
+-    lv_image_set_src(mark, &s_vokie_symbol);
+-    lv_obj_set_pos(mark, UI_LOGO_X, UI_LOGO_Y);
++    lv_obj_t *tile = box(s_screen, UI_LOGO_X, UI_LOGO_Y, 106, 92, UI_PANEL, 22);
++    const int heights[] = {15, 39, 27, 15};
++    for (int i = 0; i < 4; ++i) {
++        s_waveform[i] = box(tile, 18 + 12 * i, (92 - heights[i]) / 2,
++                            6, heights[i], UI_GREEN, 3);
++    }
++    box(tile, 69, 30, 18, 6, UI_WHITE, 3);
++    box(tile, 75, 30, 6, 33, UI_WHITE, 3);
++    box(tile, 69, 57, 18, 6, UI_WHITE, 3);
+ }
+ 
+ static void draw_button_rail(void)
+ {
+     // Button hints and leader lines appear after a physical-key action.
+     const uint32_t colors[3] = {UI_ORANGE, UI_BLUE, UI_GREEN};
+-    const char *actions[3] = {"VOICE", "SEND", "UNDO"};
++    // The Mac owns DOWN and OK bindings, so these labels identify the keys.
++    const char *actions[3] = {"VOICE", "DOWN", "OK"};
+     s_button_hints = lv_obj_create(s_screen);
+     lv_obj_remove_style_all(s_button_hints);
+     lv_obj_set_pos(s_button_hints, 0, 0);
+@@ -204,6 +195,16 @@ static void draw_battery(void)
+     lv_obj_set_pos(s_battery, UI_BATTERY_X, UI_BATTERY_Y);
+ }
+ 
++static void draw_footer(void)
++{
++    lv_obj_t *footer = box(s_screen, 19, 280, 202, 26, UI_PANEL, 8);
++    s_footer_key = box(footer, 10, 5, 25, 16, UI_GREEN, 3);
++    lv_obj_t *key_text = label(s_footer_key, "UP", &lv_font_montserrat_10, UI_BG, 25);
++    lv_obj_set_y(key_text, 2);
++    s_footer_hint = label(footer, "", &lv_font_montserrat_14, UI_WHITE, 202);
++    lv_obj_set_y(s_footer_hint, 4);
++}
++
+ static void set_button_hints_visible(ui_status_hint_t hints)
+ {
+     if (!s_button_hints) return;
+@@ -245,13 +246,78 @@ static void set_button_hints_visible(ui_status_hint_t hints)
+ static void render_state(const ui_idle_t *state, ui_status_hint_t hints)
+ {
+     const uint32_t color = state_color(state->state);
+-    lv_label_set_text(s_state, state_name(state->state));
+-    lv_obj_set_style_text_color(s_state, lv_color_hex(color), 0);
+-    lv_label_set_text(s_detail, state->message[0] ? state->message : "Vokie is ready");
++    const char *detail = state->message;
++    const char *hint = "Please wait";
++    bool show_up = false;
++    switch (state->state) {
++    case UI_STATUS_READY:
++    case UI_STATUS_SUCCESS:
++        if (!*detail || strcmp(detail, "Ready") == 0) detail = "Mac connected";
++        hint = "Start recording";
++        show_up = true;
++        break;
++    case UI_STATUS_RECORDING:
++        if (strcmp(detail, "Listening") == 0) detail = "Sending audio to Mac";
++        hint = "Stop recording";
++        show_up = true;
++        break;
++    case UI_STATUS_PROCESSING:
++        if (strcmp(detail, "Processing") == 0) detail = "Sending final audio";
++        break;
++    case UI_STATUS_ERROR:
++        hint = "Try recording again";
++        show_up = true;
++        break;
++    case UI_STATUS_DISCONNECTED:
++        detail = "Waiting for Mac";
++        hint = "Open PassVoice on Mac";
++        break;
++    case UI_STATUS_STARTING:
++        detail = "Connecting to Mac";
++        break;
++    }
++    lv_label_set_text(s_state, state_name(state));
++    lv_label_set_text(s_detail, detail);
++    for (int i = 0; i < 4; ++i) {
++        lv_obj_set_style_bg_color(s_waveform[i], lv_color_hex(color), 0);
++    }
++    if (show_up) {
++        lv_obj_remove_flag(s_footer_key, LV_OBJ_FLAG_HIDDEN);
++        lv_obj_set_style_bg_color(s_footer_key, lv_color_hex(color), 0);
++    } else {
++        lv_obj_add_flag(s_footer_key, LV_OBJ_FLAG_HIDDEN);
++    }
++    lv_obj_set_x(s_footer_hint, show_up ? 44 : 0);
++    lv_obj_set_width(s_footer_hint, show_up ? 148 : 202);
++    lv_obj_set_style_text_align(s_footer_hint, show_up ? LV_TEXT_ALIGN_LEFT : LV_TEXT_ALIGN_CENTER, 0);
++    lv_label_set_text(s_footer_hint, hint);
+     set_button_hints_visible(hints);
+     lv_obj_set_style_opa(s_screen, LV_OPA_COVER, 0);
+ }
+ 
++static void create_status_screen(void)
++{
++    s_screen = lv_obj_create(NULL);
++    lv_obj_remove_style_all(s_screen);
++    lv_obj_remove_flag(s_screen, LV_OBJ_FLAG_SCROLLABLE);
++    lv_obj_set_style_bg_color(s_screen, lv_color_hex(UI_BG), 0);
++    lv_obj_set_style_bg_opa(s_screen, LV_OPA_COVER, 0);
++
++    lv_obj_t *caption = label(s_screen, "PassVoice", &lv_font_montserrat_14, UI_WHITE, 0);
++    lv_obj_set_pos(caption, 19, UI_BATTERY_Y + 1);
++    draw_battery();
++    draw_passvoice();
++    draw_footer();
++    draw_button_rail();
++
++    s_state = label(s_screen, "", &lv_font_montserrat_30, UI_WHITE, UI_CONTENT_W);
++    lv_obj_set_pos(s_state, UI_CONTENT_X, UI_STATE_Y);
++    s_detail = label(s_screen, "", &lv_font_montserrat_14, UI_MUTED, UI_CONTENT_W);
++    lv_label_set_long_mode(s_detail, LV_LABEL_LONG_DOT);
++    lv_obj_set_pos(s_detail, UI_CONTENT_X, UI_DETAIL_Y);
++    lv_screen_load(s_screen);
++}
++
+ static ui_idle_t snapshot(void)
+ {
+     taskENTER_CRITICAL(&s_state_lock);
+@@ -358,32 +424,7 @@ void ui_status_init(void)
+         .last_touch_us = now, .hints_deadline_us = now + UI_HINT_TIMEOUT_US,
+         .revision = 1,
+     };
+-    s_screen = lv_obj_create(NULL);
+-    lv_obj_remove_style_all(s_screen);
+-    lv_obj_set_style_bg_color(s_screen, lv_color_hex(UI_BG), 0);
+-    lv_obj_set_style_bg_opa(s_screen, LV_OPA_COVER, 0);
+-
+-    // Center the bold brand title below the logo and the upper status group.
+-    lv_obj_t *caption = label(s_screen, "Vokie Power",
+-                              &vokie_title_barlow_condensed_bold_22,
+-                              UI_MUTED, UI_HEADER_W);
+-    lv_label_set_long_mode(caption, LV_LABEL_LONG_CLIP);
+-    lv_obj_set_pos(caption, UI_HEADER_X, UI_HEADER_Y);
+-    draw_vokie();
+-    draw_button_rail();
+-    draw_battery();
+-
+-    s_state = label(s_screen, "", &lv_font_montserrat_20, UI_BLUE, UI_CONTENT_W);
+-    lv_obj_set_pos(s_state, UI_CONTENT_X, UI_STATE_Y);
+-    s_detail = lv_label_create(s_screen);
+-    lv_obj_set_style_text_font(s_detail, &lv_font_montserrat_14, 0);
+-    lv_obj_set_style_text_color(s_detail, lv_color_hex(UI_MUTED), 0);
+-    lv_obj_set_style_text_align(s_detail, LV_TEXT_ALIGN_CENTER, 0);
+-    lv_obj_set_width(s_detail, UI_CONTENT_W);
+-    lv_label_set_long_mode(s_detail, LV_LABEL_LONG_DOT);
+-    lv_obj_set_pos(s_detail, UI_CONTENT_X, UI_DETAIL_Y);
+-
+-    lv_screen_load(s_screen);
++    create_status_screen();
+     render_state(&s_idle, UI_STATUS_HINT_ALL);
+     set_backlight(ui_idle_brightness(&s_idle, now));
+     bsp_lvgl_unlock();
+diff --git a/sdkconfig.defaults b/sdkconfig.defaults
+index e59588b..8b273da 100644
+--- a/sdkconfig.defaults
++++ b/sdkconfig.defaults
+@@ -33,6 +33,7 @@ CONFIG_LV_FONT_MONTSERRAT_10=y
+ CONFIG_LV_FONT_MONTSERRAT_12=y
+ CONFIG_LV_FONT_MONTSERRAT_14=y
+ CONFIG_LV_FONT_MONTSERRAT_20=y
++CONFIG_LV_FONT_MONTSERRAT_30=y
+ # LVGL 内置 malloc 池大小(KB)。它是独立静态区、不与系统堆共享,配大了会白白占用 RAM。
+ # 本 demo UI 简单,24KB 足够;若自建复杂界面出现绘制卡死/看门狗,调大此值。
+ CONFIG_LV_MEM_SIZE_KILOBYTES=24
+-- 
+2.54.0 (Apple Git-157)
+

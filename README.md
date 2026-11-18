@@ -21,7 +21,7 @@ PassVoice 在 macOS 上接收 AI Passport 的 BLE 语音，把音频送入 Black
 
 ## Passport 按键设置
 
-从菜单栏打开「按键设置…」。四个手势都可以选择「回车」「退格」「删除上一段语音输入」「不执行」，也可以点击「录入快捷键…」并按下所需组合键。修改立即生效，App 重启后保留，多台 Passport 共用同一套绑定。点击「恢复默认设置」重置四项。
+从菜单栏打开「按键设置…」。四个手势都可以选择「回车」「退格」「删除上一段语音输入」「不执行」。点每行右侧的键盘图标录入快捷键，点右上角的回转箭头恢复默认设置。修改立即生效，App 重启后保留，多台 Passport 共用同一套绑定。
 
 | 按键 | 短按 | 长按（650 ms） |
 | --- | --- | --- |
@@ -45,12 +45,15 @@ git am "$passvoice_repo/firmware/0001-passvoice-up-only.patch" \
   "$passvoice_repo/firmware/0002-passvoice-down-hold.patch" \
   "$passvoice_repo/firmware/0003-passvoice-deliver-gestures-from-worker.patch" \
   "$passvoice_repo/firmware/0004-passvoice-resume-audio-link.patch" \
-  "$passvoice_repo/firmware/0005-passvoice-wait-for-audio-link.patch"
+  "$passvoice_repo/firmware/0005-passvoice-wait-for-audio-link.patch" \
+  "$passvoice_repo/firmware/0006-passvoice-status-screen.patch"
 . /path/to/esp-idf-v5.5.3/export.sh
 ./tools/validate.sh
 ```
 
 固件保留空闲 20 秒后的 90–120 ms 低功耗 BLE 间隔。编辑按键唤醒后，若连接已满足空闲间隔，就不再重复请求更新；下次 UP 最多等待 3 秒恢复 15 ms 音频间隔，容纳 Mac 实测耗时 1531 ms 的连接更新，避免首次 UP 过早显示 `Slow BLE`。停止采集或断连会提前取消等待。
+
+Passport 屏幕用大字显示连接和录音状态。按下实体键，PassVoice 图标右侧会显示 `VOICE`、`DOWN` 或 `OK`，细线指向相应的实体键。启动时短暂展示三键提示，平时只显示最近按下的一键。该提示在录音和收尾期间保持，空闲后淡出。
 
 验证通过后，可用 AI Passport 小程序安装生成的 `build/FoloToy-AI-Passport-full.bin`。 [固件安装与分区约定](https://github.com/CandySunPlus/vokie-ai-passport-firmware/blob/0e3543259f578f5d5678a58edecca5c8bb81e927/docs/development/engineering/ble-recovery-compatibility.zh_CN.md)
 
