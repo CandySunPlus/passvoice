@@ -168,7 +168,8 @@ protocol PassportVoiceTarget: AnyObject {
         ifSnapshotIs expected: PassportTextState, onEdit: @escaping (PassportEditObservation) -> Void
     ) -> Bool
 
-    func delete(_ range: NSRange, ifSnapshotIs expected: PassportTextState, onDeletion: @escaping () -> Void) throws
+    func replace(_ range: NSRange, with text: String, ifSnapshotIs expected: PassportTextState,
+                 onReplacement: @escaping () -> Void) throws
 }
 
 extension PassportVoiceTarget {

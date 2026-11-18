@@ -28,7 +28,7 @@ PassVoice 在 macOS 上接收 AI Passport 的 BLE 语音，把音频送入 Black
 | DOWN | 回车 | 不执行 |
 | OK | 退格 | 删除上一段语音输入 |
 
-支持 BLE V1 的旧固件仍可连接，PassVoice 会处理设备已上报的手势。应用下面的补丁可启用 DOWN 长按及 UP 独占录音控制。录音期间按 DOWN 或 OK 会被忽略。
+支持 BLE V1 的旧固件仍可连接，PassVoice 会处理设备已上报的手势。安装配套固件后，录音中长按 OK 会取消本次语音；按 UP 正常确认后，长按 OK 仍按「按键设置」里的绑定执行，默认删除上一段语音输入。取消会立即停止播放缓冲音频，等豆包停止更新文字后，只移除能定位到本次语音的文字。
 
 蓝牙音频处理完毕后可再次按 UP 录音。如果此前的语音仍可能在同一输入框提交，PassVoice 会继续录音，并停用这次的暂存回车和语音删除。录音时已显示的语音文字，通常要等输入法组合文字结束才能执行暂存回车和语音删除。Codex 输入框无法提供组合文字状态时，长按 OK 仍可删除能唯一定位的语音文字。PassVoice 会等原输入框确认已选中这段文字，再发送退格。编辑合并或范围无法确认时，长按 OK 会保留整段文字。
 
@@ -46,7 +46,8 @@ git am "$passvoice_repo/firmware/0001-passvoice-up-only.patch" \
   "$passvoice_repo/firmware/0003-passvoice-deliver-gestures-from-worker.patch" \
   "$passvoice_repo/firmware/0004-passvoice-resume-audio-link.patch" \
   "$passvoice_repo/firmware/0005-passvoice-wait-for-audio-link.patch" \
-  "$passvoice_repo/firmware/0006-passvoice-status-screen.patch"
+  "$passvoice_repo/firmware/0006-passvoice-status-screen.patch" \
+  "$passvoice_repo/firmware/0007-passvoice-cancel-voice.patch"
 . /path/to/esp-idf-v5.5.3/export.sh
 ./tools/validate.sh
 ```
@@ -86,7 +87,8 @@ swift build -c release
 - 连接后空闲至少 20 秒，短按 DOWN、OK 等编辑按键，再空闲至少 20 秒。按 UP 开始说话，检查没有出现 `Slow BLE`，再次按 UP 后文字正常提交。再空闲并重复一次，检查低功耗待机后仍可开始录音。
 - 对同一设备做两次 `UP → 说话 → UP`。检查文字是否出现在光标处，每次说话的首尾是否完整。
 - 空闲时短按 DOWN，检查是否收到一次回车。用 UP 停止较长的语音后立即短按 DOWN，检查是否先落字，再收到一次回车。在等待期间切换到另一个输入框，检查新输入框没有收到回车。
-- 空闲时短按 OK，检查是否退格一次。长按 DOWN，检查默认不执行。分别修改四个手势的绑定，检查每次按压只执行对应动作一次。录音时重复四种手势，再按 UP 结束，检查录音完整且手势未执行。恢复默认设置后复查四种手势。
+- 空闲时短按 OK，检查是否退格一次。长按 DOWN，检查默认不执行。分别修改四个手势的绑定，检查每次按压只执行对应动作一次。录音时试短按 OK、短按和长按 DOWN，再按 UP 结束，检查录音完整且手势未执行。恢复默认设置后复查四种手势。
+- 在 Codex 和文本编辑中先手打 A，再按 UP 说 B，看到文字后直接长按 OK。检查只剩 A，设备回到 Ready，并且下一次语音可正常开始。
 - 在同一个输入框先输入 A，再用 Passport 说 B。等 B 落地后手打 C，长按 OK，检查剩下 A 和 C。再次长按或切换到另一个输入框后长按，检查文字没有变化。
 - 确认语音 B 落地后，手动删除 B 并重新打出相同文字。长按 OK，检查手打的 B 保留。
 - 在录音过程中断开设备，连接恢复后再做一次完整语音输入。检查桥接日志是否再次出现 `Passport ready`。

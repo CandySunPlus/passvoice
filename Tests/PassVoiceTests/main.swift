@@ -419,6 +419,94 @@ struct PassportBridgeTests {
         expectEqual(harness.input.text, "AB")
     }
 
+    func testCancelStopsAudioAndDeletesOnlyTheCurrentVoiceInput() {
+        let harness = Harness()
+        harness.startVoiceCapture(text: "AC")
+        // Start another session with the caret between two existing characters.
+        harness.cancelVoiceCapture()
+        harness.input.selection = NSRange(location: 1, length: 0)
+        harness.control(["type": "ptt_down", "sessionId": 2])
+        harness.frame(session: 2, sequence: 0, sample: 12)
+        harness.advance(by: 50)
+        harness.input.text = "A语音🙂C"
+        harness.input.selection = NSRange(location: 5, length: 0)
+        harness.input.composition = .composing
+        harness.cancelVoiceCapture(session: 2)
+        expectTrue(harness.outputs[1].stopped)
+        harness.frame(session: 2, sequence: 1, sample: 22)
+        expectEqual(harness.outputs[1].samples, [12])
+        harness.downClick()
+        harness.advance(by: 100)
+        expectEqual(harness.input.text, "A语音🙂C")
+        harness.input.composition = .clear
+        harness.advance(by: 100)
+        expectEqual(harness.input.text, "AC")
+        expectEqual(harness.keys, [])
+        expectEqual(harness.statuses.last, .ready)
+        harness.okLong()
+        expectEqual(harness.input.text, "AC")
+    }
+
+    func testCancelWaitsForTheFinalVoiceRevisionWhenCompositionIsUnknown() {
+        let harness = Harness()
+        harness.input.canDeleteAttributedVoiceText = true
+        harness.startVoiceCapture()
+        harness.advance(by: 50)
+        harness.cancelVoiceCapture()
+        harness.input.updateValue("A临时", caret: 3)
+        harness.advance(by: 100)
+        harness.input.updateValue("A最终结果", caret: 5)
+        harness.advance(by: 600)
+        harness.advance(by: 500)
+        expectEqual(harness.input.text, "A最终结果")
+        harness.advance(by: 500)
+        expectEqual(harness.input.text, "A")
+        expectEqual(harness.statuses.last, .ready)
+    }
+
+    func testCancelRestoresTextThatVoiceReplacedAtTheOriginalSelection() {
+        let harness = Harness()
+        harness.connect()
+        harness.input.text = "A手打🙂C"
+        harness.input.selection = NSRange(location: 1, length: 4)
+        harness.control(["type": "ptt_down", "sessionId": 1])
+        harness.frame(session: 1, sequence: 0, sample: 12)
+        harness.advance(by: 50)
+        harness.input.text = "A语音C"
+        harness.input.selection = NSRange(location: 3, length: 0)
+        harness.input.composition = .clear
+        harness.cancelVoiceCapture()
+        harness.advance(by: 100)
+        expectEqual(harness.input.text, "A手打🙂C")
+        expectEqual(harness.statuses.last, .ready)
+    }
+
+    func testCancelAfterFocusChangesLeavesTextAndReturnsToReady() {
+        let harness = Harness()
+        harness.startVoiceCapture()
+        harness.advance(by: 50)
+        harness.input.hasFocus = false
+        harness.input.text = "Different input"
+        harness.cancelVoiceCapture()
+        harness.advance(by: 5000)
+        expectEqual(harness.input.text, "Different input")
+        expectEqual(harness.statuses.last, .ready)
+    }
+
+    func testStaleCancellationCannotCancelAConfirmedSession() {
+        let harness = Harness()
+        harness.startVoiceCapture()
+        harness.advance(by: 50)
+        harness.cancelVoiceCapture(session: 2)
+        expectEqual(harness.statuses.last, .recording)
+        harness.finishVoiceCapture()
+        harness.cancelVoiceCapture()
+        harness.commitVoiceText("AB", caret: 2)
+        expectEqual(harness.input.text, "AB")
+        harness.okLong()
+        expectEqual(harness.input.text, "A")
+    }
+
     func testOKLongCanDeleteTheCommitAlsoUsedForQueuedReturn() {
         let harness = Harness()
         harness.stopVoiceSessionWithQueuedReturn()
@@ -614,6 +702,15 @@ struct PassportBridgeTests {
             outputs[0].completeDrain()
         }
 
+        func cancelVoiceCapture(session: Int = 1) {
+            control(["type": "ptt_cancel", "sessionId": session])
+        }
+
+        func advance(by milliseconds: Int) {
+            now = now + .milliseconds(milliseconds)
+            bridge.tick(now: now)
+        }
+
         func commitVoiceText(_ text: String, caret: Int) {
             input.setText(text, caret: caret)
             bridge.tick(now: now + .milliseconds(100))
@@ -702,11 +799,12 @@ struct PassportBridgeTests {
         func confirmTyping() { onEdit?(.typingConfirmationKey(insertsText: false)) }
         func pressSpace() { onEdit?(.typingConfirmationKey(insertsText: true)) }
 
-        func delete(_ range: NSRange, ifSnapshotIs expected: PassportTextState, onDeletion: @escaping () -> Void) {
+        func replace(_ range: NSRange, with replacement: String, ifSnapshotIs expected: PassportTextState,
+                     onReplacement: @escaping () -> Void) {
             guard snapshot() == expected, let indices = Range(range, in: text) else { return }
-            text.removeSubrange(indices)
-            selection = NSRange(location: range.location, length: 0)
-            onDeletion()
+            text.replaceSubrange(indices, with: replacement)
+            selection = NSRange(location: range.location + replacement.utf16.count, length: 0)
+            onReplacement()
         }
 
         func send(_ key: PassportKeystroke, ifSnapshotIs expected: PassportTextState) {
@@ -971,6 +1069,11 @@ tests.testOKLongKeepsAnIdenticalReplacement()
 tests.testOKLongRequiresEvidenceOfTheEditsBetweenSnapshots()
 tests.testOKLongKeepsTypingReportedInOneInsertion()
 tests.testOKLongDuringRecordingAndCommitWaitDoesNotQueueDeletion()
+tests.testCancelStopsAudioAndDeletesOnlyTheCurrentVoiceInput()
+tests.testCancelWaitsForTheFinalVoiceRevisionWhenCompositionIsUnknown()
+tests.testCancelRestoresTextThatVoiceReplacedAtTheOriginalSelection()
+tests.testCancelAfterFocusChangesLeavesTextAndReturnsToReady()
+tests.testStaleCancellationCannotCancelAConfirmedSession()
 tests.testOKLongCanDeleteTheCommitAlsoUsedForQueuedReturn()
 tests.testFinishWaitsForInclusiveTailAndBlackHoleDrainBeforeAllowingAnotherSession()
 tests.testMissingTailFrameIsFilledWithSilenceAfterWaiting()
@@ -988,4 +1091,4 @@ tests.testSavedShortcutSendsItsKeyAndModifiersAfterReloadingBindings()
 tests.testRestoringDefaultsClearsAllSavedBindings()
 tests.testDownLongDoesNotSendOrQueueItsBindingDuringCapture()
 tests.testCustomReturnIsIgnoredWhileRecordingAndNeverDeferred()
-print("48 Passport bridge tests passed")
+print("53 Passport bridge tests passed")

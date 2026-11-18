@@ -7,7 +7,8 @@ enum PassportMacInput {
         MacVoiceTarget.observe()
     }
 
-    static func send(_ key: PassportKeystroke, to processID: pid_t? = nil, tag: Int64 = 0) throws {
+    private static func send(_ key: PassportKeystroke, to processID: pid_t?, tag: Int64,
+                             unicodeText: String?) throws {
         try VoiceHotkey.checkAccess()
         guard let down = CGEvent(keyboardEventSource: nil, virtualKey: key.keyCode, keyDown: true),
               let up = CGEvent(keyboardEventSource: nil, virtualKey: key.keyCode, keyDown: false) else {
@@ -20,6 +21,13 @@ enum PassportMacInput {
             down.setIntegerValueField(.eventSourceUserData, value: tag)
             up.setIntegerValueField(.eventSourceUserData, value: tag)
         }
+        if let unicodeText {
+            Array(unicodeText.utf16).withUnsafeBufferPointer { characters in
+                for event in [down, up] {
+                    event.keyboardSetUnicodeString(stringLength: characters.count, unicodeString: characters.baseAddress)
+                }
+            }
+        }
         if let processID {
             down.postToPid(processID)
             up.postToPid(processID)
@@ -27,6 +35,15 @@ enum PassportMacInput {
             down.post(tap: .cghidEventTap)
             up.post(tap: .cghidEventTap)
         }
+    }
+
+    static func send(_ key: PassportKeystroke, to processID: pid_t? = nil, tag: Int64 = 0) throws {
+        try send(key, to: processID, tag: tag, unicodeText: nil)
+    }
+
+    static func replaceCodexSelection(with text: String, to processID: pid_t) throws {
+        let key: PassportKeystroke = text.isEmpty ? .backspace : PassportKeystroke(keyCode: UInt16(kVK_ANSI_A))
+        try send(key, to: processID, tag: VoiceHotkey.eventTag, unicodeText: text.isEmpty ? nil : text)
     }
 }
 
@@ -176,7 +193,8 @@ private final class MacVoiceTarget: PassportVoiceTarget {
         try PassportMacInput.send(key, to: processID)
     }
 
-    func delete(_ range: NSRange, ifSnapshotIs expected: PassportTextState, onDeletion: @escaping () -> Void) throws {
+    func replace(_ range: NSRange, with text: String, ifSnapshotIs expected: PassportTextState,
+                 onReplacement: @escaping () -> Void) throws {
         let selectionAttribute = kAXSelectedTextRangeAttribute as CFString
         let textAttribute = kAXSelectedTextAttribute as CFString
         guard range.length > 0, let indices = expected.indices(of: range),
@@ -187,13 +205,14 @@ private final class MacVoiceTarget: PassportVoiceTarget {
               !IsSecureEventInputEnabled() else { return }
 
         let selected = PassportTextState(text: expected.text, selectedRange: range, composition: expected.composition)
-        let remaining = expected.text.replacingCharacters(in: indices, with: "")
+        let resultingText = expected.text.replacingCharacters(in: indices, with: text)
         if isCodexEditor {
             guard expected.composition != .composing else { return }
             let revision = inputRevision
             guard AXUIElementSetAttributeValue(element, selectionAttribute, voiceSelection) == .success else { return }
-            deleteCodexSelection(expected: expected, selected: selected, remaining: remaining,
-                                 revision: revision, attempts: 9, onDeletion: onDeletion)
+            replaceCodexSelection(expected: expected, selected: selected, replacement: text,
+                                  resultingText: resultingText, revision: revision, attempts: 9,
+                                  onReplacement: onReplacement)
             return
         }
         guard isSettable(textAttribute) else { return }
@@ -211,32 +230,33 @@ private final class MacVoiceTarget: PassportVoiceTarget {
               selectedText.utf16.elementsEqual(expected.text[indices].utf16),
               hasOnlySelection(range), snapshot() == selected, !IsSecureEventInputEnabled() else { return }
 
-        guard AXUIElementSetAttributeValue(element, textAttribute, "" as CFString) == .success,
-              let updated = snapshot(), updated.text.utf16.elementsEqual(remaining.utf16) else {
-            throw BridgeError("The input could not confirm deletion of the selected text")
+        guard AXUIElementSetAttributeValue(element, textAttribute, text as CFString) == .success,
+              let updated = snapshot(), updated.text.utf16.elementsEqual(resultingText.utf16) else {
+            throw BridgeError("The input could not verify replacement of the selected text")
         }
-        onDeletion()
+        onReplacement()
     }
 
-    private func deleteCodexSelection(expected: PassportTextState, selected: PassportTextState,
-                                      remaining: String, revision: UInt64, attempts: Int,
-                                      onDeletion: @escaping () -> Void) {
+    private func replaceCodexSelection(expected: PassportTextState, selected: PassportTextState,
+                                       replacement: String, resultingText: String, revision: UInt64, attempts: Int,
+                                       onReplacement: @escaping () -> Void) {
         guard inputRevision == revision, canListenToInput, let current = snapshot(),
               current == expected || current == selected else { return }
         // Chromium delivers the AX selection to its renderer asynchronously.
-        // Send Backspace only after that renderer reports the exact voice span.
+        // Edit only after that renderer reports the exact voice span.
         if current == selected, hasOnlySelection(selected.selectedRange),
            let range = selected.indices(of: selected.selectedRange),
            let text = Self.attribute(kAXSelectedTextAttribute, of: element) as? String,
            text.utf16.elementsEqual(selected.text[range].utf16),
            inputRevision == revision, canListenToInput, snapshot() == selected,
-           (try? PassportMacInput.send(.backspace, to: processID, tag: VoiceHotkey.eventTag)) != nil {
-            confirmCodexDeletion(before: selected, remaining: remaining, revision: revision,
-                                 attempts: 9, onDeletion: onDeletion)
+           (try? PassportMacInput.replaceCodexSelection(with: replacement, to: processID)) != nil {
+            confirmCodexReplacement(before: selected, resultingText: resultingText, revision: revision,
+                                    attempts: 9, onReplacement: onReplacement)
         } else if attempts > 0 {
             DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(20)) {
-                self.deleteCodexSelection(expected: expected, selected: selected, remaining: remaining,
-                                          revision: revision, attempts: attempts - 1, onDeletion: onDeletion)
+                self.replaceCodexSelection(expected: expected, selected: selected, replacement: replacement,
+                                           resultingText: resultingText, revision: revision, attempts: attempts - 1,
+                                           onReplacement: onReplacement)
             }
         } else if inputRevision == revision, canListenToInput, snapshot() == selected,
                   let original = Self.rangeValue(expected.selectedRange) {
@@ -244,15 +264,16 @@ private final class MacVoiceTarget: PassportVoiceTarget {
         }
     }
 
-    private func confirmCodexDeletion(before: PassportTextState, remaining: String, revision: UInt64,
-                                      attempts: Int, onDeletion: @escaping () -> Void) {
+    private func confirmCodexReplacement(before: PassportTextState, resultingText: String, revision: UInt64,
+                                         attempts: Int, onReplacement: @escaping () -> Void) {
         guard inputRevision == revision, let current = snapshot() else { return }
-        if current.text.utf16.elementsEqual(remaining.utf16) || (remaining.isEmpty && current.readOnlyWidget != nil) {
-            onDeletion()
+        if current.text.utf16.elementsEqual(resultingText.utf16)
+            || (resultingText.isEmpty && current.readOnlyWidget != nil) {
+            onReplacement()
         } else if current.hasSameText(as: before), attempts > 0 {
             DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(20)) {
-                self.confirmCodexDeletion(before: before, remaining: remaining, revision: revision,
-                                          attempts: attempts - 1, onDeletion: onDeletion)
+                self.confirmCodexReplacement(before: before, resultingText: resultingText, revision: revision,
+                                             attempts: attempts - 1, onReplacement: onReplacement)
             }
         }
     }

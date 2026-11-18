@@ -1,0 +1,369 @@
+From: NikSun <candysfm@gmail.com>
+Date: Wed, 18 Nov 2026 15:34:55 +0800
+Subject: [PATCH 7/7] feat(ble): cancel the active PassVoice capture
+
+Negotiate cancellation with the host and transmit a session-scoped terminal
+event for an OK hold inside an active capture.
+---
+ docs/CHANGELOG.md                      |  2 ++
+ docs/CHANGELOG.zh_CN.md                |  2 ++
+ docs/ai-passport-ble-protocol.md       | 14 +++++++--
+ docs/ai-passport-ble-protocol.zh_CN.md | 13 ++++++--
+ main/button_gesture.h                  | 16 ++++++++--
+ main/vokie_ble.c                       | 55 ++++++++++++++++++++++++++++++----
+ tests/test_button_gesture.c            | 25 ++++++++++++++++
+ 7 files changed, 115 insertions(+), 12 deletions(-)
+
+diff --git a/docs/CHANGELOG.md b/docs/CHANGELOG.md
+index bae8c9a..598904e 100644
+--- a/docs/CHANGELOG.md
++++ b/docs/CHANGELOG.md
+@@ -6,6 +6,8 @@
+
+ ## Unreleased
+
++- Let PassVoice opt in to cancelling the active voice capture with an OK hold. The new session-scoped terminal event lets the Mac discard buffered audio and remove only the cancelled voice input.
++
+ - Show the PassVoice waveform and text cursor above a large capture status. Briefly indicate the pressed physical key beside the icon, with a leader line to its position on the right edge.
+
+ - Wait up to 3 seconds for the audio link to recover from idle, accommodating the measured 1531 ms Mac connection update so the first UP can start capture. Preserve cancellation and the bounded failure path.
+diff --git a/docs/CHANGELOG.zh_CN.md b/docs/CHANGELOG.zh_CN.md
+index 2f6d5e8..c63258d 100644
+--- a/docs/CHANGELOG.zh_CN.md
++++ b/docs/CHANGELOG.zh_CN.md
+@@ -6,6 +6,8 @@
+
+ ## Unreleased
+
++- PassVoice 可启用录音时长按 OK 取消本次语音。新增的会话结束事件让 Mac 丢弃缓冲音频，并只移除本次取消的语音文字。
++
+ - 用 PassVoice 声波和文字光标搭配大字显示录音状态。按下实体键时，图标右侧短暂显示对应提示，并用细线指向屏幕右侧的实体键位置。
+
+ - 从空闲恢复音频连接时最多等待 3 秒，容纳实测耗时 1531 ms 的 Mac 连接更新，让首次 UP 即可开始采集。保留取消和有界失败行为。
+diff --git a/docs/ai-passport-ble-protocol.md b/docs/ai-passport-ble-protocol.md
+index 50eba7d..978b070 100644
+--- a/docs/ai-passport-ble-protocol.md
++++ b/docs/ai-passport-ble-protocol.md
+@@ -52,6 +52,7 @@ Host-to-device messages are:
+ ```json
+ {"v":1,"type":"host_ready"}
+ {"v":1,"type":"host_ready","host":"passvoice"}
++{"v":1,"type":"host_ready","host":"passvoice","cancelVoice":true}
+ {"v":1,"type":"host_state","state":"processing"}
+ ```
+
+@@ -88,8 +89,17 @@ A host can opt in to the PassVoice button policy for its connection by
+ sending `"host":"passvoice"` in `host_ready`. Both `DOWN` and `OK` report
+ `click` or `long` through `button_event`. Each key uses its own 650 ms hold
+ timer, including after a quick tap. The hold is the only event for that press.
+-Only an `UP` click can end capture in this mode. `DOWN` and `OK` gestures
+-that begin or trigger during capture are suppressed. A fresh press can trigger
++An `UP` click ends capture normally. Capture suppresses editing gestures.
++With `"cancelVoice":true` in `host_ready`, an OK hold within the same
++active capture stops the microphone and sends the following terminal event.
++
++```json
++{"v":1,"type":"ptt_cancel","sessionId":123,"seq":1}
++```
++
++The host discards buffered audio for that session and sends `host_state`
++with `state:"ready"` after cancellation completes. An OK press that starts
++during capture is consumed by that capture. A fresh press can trigger
+ immediately after `UP` requests the stop. The audio worker queues its
+ `button_event` after successfully queueing `ptt_up`, with an optional
+ `sessionId` identifying the capture if the gesture triggered before
+diff --git a/docs/ai-passport-ble-protocol.zh_CN.md b/docs/ai-passport-ble-protocol.zh_CN.md
+index 63ff1a5..eca8bdc 100644
+--- a/docs/ai-passport-ble-protocol.zh_CN.md
++++ b/docs/ai-passport-ble-protocol.zh_CN.md
+@@ -44,6 +44,7 @@ Control 值是带 `v: 1` 的完整 UTF-8 JSON 对象，最长 182 字节。设
+ ```json
+ {"v":1,"type":"host_ready"}
+ {"v":1,"type":"host_ready","host":"passvoice"}
++{"v":1,"type":"host_ready","host":"passvoice","cancelVoice":true}
+ {"v":1,"type":"host_state","state":"processing"}
+ ```
+
+@@ -72,8 +73,16 @@ Control 值是带 `v: 1` 的完整 UTF-8 JSON 对象，最长 182 字节。设
+ 主机可以在 `host_ready` 中发送 `"host":"passvoice"`，为本次连接启用
+ PassVoice 按键策略。`DOWN` 和 `OK` 都使用 `button_event` 上报 `click` 或
+ `long`。两个按键分别使用独立的 650 ms 长按计时，紧接短按的长按也可识别。长按
+-是当次按压的唯一事件。此模式只有单击 `UP` 能结束采集。在采集中开始或触发的
+-`DOWN` 和 `OK` 手势会被忽略。`UP` 请求停止后，新按压可立即生效。音频任务在
++是当次按压的唯一事件。单击 `UP` 正常结束采集，采集期间屏蔽编辑手势。当
++`host_ready` 包含 `"cancelVoice":true` 时，在同一次采集中长按 OK 会停止麦克风，
++并发送以下结束事件。
++
++```json
++{"v":1,"type":"ptt_cancel","sessionId":123,"seq":1}
++```
++
++主机丢弃本次采集的缓冲音频，取消完成后发送 `state:"ready"` 的 `host_state`。
++采集过程中开始的 OK 按压归属当次采集。`UP` 请求停止后，新按压可立即生效。音频任务在
+ 成功将 `ptt_up` 放入发送队列后，才排入对应的 `button_event`。如果手势在
+ `ptt_up` 发出前触发，事件带有可选的 `sessionId` 用于标识本次采集。在 UP
+ 请求停止后、`ptt_up` 发出前开始或触发的手势要求本次采集正常停止。采集失败、
+diff --git a/main/button_gesture.h b/main/button_gesture.h
+index 3e2ac08..d8a5fcb 100644
+--- a/main/button_gesture.h
++++ b/main/button_gesture.h
+@@ -10,7 +10,7 @@ typedef enum {
+ } button_action_t;
+ typedef struct {
+     bool pressed, long_sent;
+-    uint32_t started_ms, context, stopped_session_at_press;
++    uint32_t started_ms, context, stopped_session_at_press, cancel_session_at_press;
+ } button_gesture_t;
+
+ // context identifies the host connection; zero means no ready host. The caller
+@@ -43,6 +43,7 @@ static inline button_action_t button_gesture_update(button_gesture_t *s,
+ typedef struct {
+     uint32_t connection;
+     uint32_t stopped_session; // UP has stopped capture; the ptt_up may still be in flight.
++    uint32_t cancel_session; // An active capture on a host that accepts ptt_cancel.
+     bool passvoice, recording;
+ } button_edit_host_t;
+
+@@ -57,10 +58,19 @@ static inline button_edit_t button_edit_update(button_gesture_t *s, button_edge_
+ {
+     const bool blocked = host.passvoice && host.recording && host.stopped_session == 0;
+     const bool new_press = edge == BUTTON_EDGE_PRESS && !s->pressed;
++    const uint32_t cancel_session = is_ok ? host.cancel_session : 0;
+     // Zero context also invalidates a press that ends after the UP stop.
+     const button_action_t action = button_gesture_update(s, edge, now_ms,
+-                                      blocked ? 0 : host.connection, long_ms);
+-    if (new_press && host.passvoice) s->stopped_session_at_press = host.stopped_session;
++                                      blocked && !cancel_session ? 0 : host.connection, long_ms);
++    if (new_press && host.passvoice) {
++        s->stopped_session_at_press = host.stopped_session;
++        s->cancel_session_at_press = cancel_session;
++    }
++    if (s->cancel_session_at_press || cancel_session) {
++        if (action == BUTTON_ACTION_LONG && cancel_session && s->cancel_session_at_press == cancel_session)
++            return (button_edit_t){.action = action, .cancel_capture = true};
++        return (button_edit_t){0};
++    }
+     if (action == BUTTON_ACTION_LONG && !is_ok && !host.passvoice) {
+         return (button_edit_t){0};
+     }
+diff --git a/main/vokie_ble.c b/main/vokie_ble.c
+index 8aae96b..28c755a 100644
+--- a/main/vokie_ble.c
++++ b/main/vokie_ble.c
+@@ -76,6 +76,7 @@ static volatile bool s_control_subscribed;
+ static volatile bool s_audio_subscribed;
+ static volatile bool s_host_ready;
+ static volatile bool s_passvoice_host;
++static volatile bool s_passvoice_cancel;
+ static volatile bool s_recording;
+ static volatile bool s_stop_requested;
+ static volatile bool s_result_pending;
+@@ -406,11 +407,16 @@ typedef struct {
+     uint32_t session, epoch;
+ } audio_link_context_t;
+
++static bool cancel_requested(void)
++{
++    return s_passvoice_cancel && s_stop_requested && s_stop_reason == DD_REASON_OK_LONG;
++}
++
+ static bool audio_link_valid(void *arg)
+ {
+     const audio_link_context_t *link = arg;
+     return link->conn != NO_CONN && link->conn == s_conn && s_recording &&
+-           link->session == s_session && link->epoch == s_connection_epoch;
++           link->session == s_session && link->epoch == s_connection_epoch && !cancel_requested();
+ }
+
+ static bool audio_link_matches(void *arg, bool idle)
+@@ -525,6 +531,7 @@ typedef struct {
+     uint32_t session, epoch, frames;
+     uint16_t conn;
+     const char *error;
++    bool cancelled;
+ } capture_end_context_t;
+
+ static bool capture_end_valid(void *arg)
+@@ -538,7 +545,10 @@ static int capture_end_notify(void *arg, bool submit)
+ {
+     const capture_end_context_t *end = arg;
+     char json[MAX_CONTROL + 1];
+-    if (submit) {
++    if (end->cancelled) {
++        snprintf(json, sizeof(json), "{\"v\":1,\"type\":\"ptt_cancel\",\"sessionId\":%lu,\"seq\":%lu}",
++                 (unsigned long)end->session, (unsigned long)++s_control_seq);
++    } else if (submit) {
+         snprintf(json, sizeof(json), "{\"v\":1,\"type\":\"ptt_up\",\"sessionId\":%lu,\"seq\":%lu,\"finalSequence\":%lu}",
+                  (unsigned long)end->session, (unsigned long)++s_control_seq,
+                  end->frames ? (unsigned long)(end->frames - 1) : EMPTY_FINAL_SEQUENCE);
+@@ -557,7 +567,7 @@ static int capture_end_disconnect(void *arg)
+
+ static int finish_capture(uint32_t session, uint32_t epoch, uint32_t frames, const char *error)
+ {
+-    capture_end_context_t end = {session, epoch, frames, s_conn, error};
++    capture_end_context_t end = {session, epoch, frames, s_conn, error, error == NULL && cancel_requested()};
+     const ble_capture_end_ops_t ops = {&end, capture_end_valid, capture_end_notify, capture_end_disconnect};
+     if (!capture_end_valid(&end)) return BLE_HS_ENOTCONN;
+     s_finishing = true;
+@@ -781,14 +791,19 @@ static void audio_task(void *arg)
+             active_requested = link_ready;
+             if (!link_ready) {
+                 if (s_recording && capture_session == s_session && capture_epoch == s_connection_epoch) {
+-                    s_stop_reason = DD_REASON_TRANSPORT;
++                    const bool cancelled = cancel_requested();
++                    if (!cancelled) s_stop_reason = DD_REASON_TRANSPORT;
+                     s_recording = false;
+                     s_stop_requested = false;
+                     device_diag_emit(DD_CAPTURE_ABORT, capture_session, s_stop_reason, 0, 0,
+                                      capture_epoch, s_connection_epoch, s_session,
+                                      diagnostic_flags(), tx_now_ms(NULL) - capture_ms);
+                     end_logged = true;
+-                    capture_error_ui(capture_session, capture_epoch, "Slow BLE link, try again");
++                    if (cancelled) {
++                        ui_status_set_state(UI_STATUS_READY, "Ready");
++                    } else {
++                        capture_error_ui(capture_session, capture_epoch, "Slow BLE link, try again");
++                    }
+                 }
+                 continue;
+             }
+@@ -817,6 +832,10 @@ static void audio_task(void *arg)
+                              esp_get_free_heap_size(), stats_ms - capture_ms, 0, 0, 0, 0);
+             ESP_LOGI(TAG, "Capture start session=%lu epoch=%lu", (unsigned long)capture_session,
+                      (unsigned long)capture_epoch);
++            if (cancel_requested()) {
++                capturing = true;
++                continue;
++            }
+             log_link("Capture link");
+             // Pause also resets DMA between sessions; a failure returns to
+             // idle so the next press can retry instead of rebooting.
+@@ -859,10 +878,20 @@ static void audio_task(void *arg)
+             capturing = true;
+         }
+         if (!s_recording || capture_session != s_session || capture_epoch != s_connection_epoch) continue;
++        if (cancel_requested()) {
++            const int stop_rc = finish_capture(capture_session, capture_epoch, sequence, NULL);
++            device_diag_emit(DD_CAPTURE_STOP, capture_session, DD_REASON_OK_LONG, sequence, s_tx_retries,
++                             stop_rc, diagnostic_flags(), capture_epoch, s_connection_epoch,
++                             tx_now_ms(NULL) - capture_ms);
++            end_logged = true;
++            if (stop_rc != 0) capture_error_ui(capture_session, capture_epoch, "BLE send failed");
++            continue;
++        }
+         const int64_t read_start = esp_timer_get_time();
+         esp_err_t read_rc = bsp_audio_read(pcm, sizeof(pcm));
+         const uint32_t read_us = (uint32_t)(esp_timer_get_time() - read_start);
+         if (read_us > max_read_us) max_read_us = read_us;
++        if (cancel_requested()) continue;
+         if (read_rc != ESP_OK) {
+             device_diag_emit(DD_MIC_ERROR, capture_session, DD_REASON_AUDIO_READ, read_rc,
+                              read_us, sequence, diagnostic_flags(), capture_epoch, 0, 0);
+@@ -891,6 +920,7 @@ static void audio_task(void *arg)
+         if (tx_ms > max_tx_ms) max_tx_ms = tx_ms;
+         // A reconnect/new request invalidates this worker's old frame and state.
+         if (capture_session != s_session || capture_epoch != s_connection_epoch || !s_recording) continue;
++        if (cancel_requested()) continue;
+         if (tx_rc != 0) {
+             s_stop_reason = DD_REASON_TRANSPORT;
+             ESP_LOGE(TAG, "Capture transport failure session=%lu next_sequence=%lu rc=%d retries=%lu",
+@@ -977,6 +1007,7 @@ static void button_cb(bsp_btn_t button, bsp_btn_ev_t event, void *user)
+     button_gesture_t *gesture = &s_button_gestures[button];
+     const button_edit_host_t edit_host = {
+         .connection = context, .stopped_session = stopped_by_up ? session : 0,
++        .cancel_session = s_passvoice_cancel && recording && !s_stop_requested ? session : 0,
+         .passvoice = passvoice, .recording = recording || (passvoice && finishing),
+     };
+     const button_edit_t edit = button == BSP_BTN_UP ? (button_edit_t){
+@@ -1028,6 +1059,7 @@ static void button_cb(bsp_btn_t button, bsp_btn_ev_t event, void *user)
+             ui_status_set_state(UI_STATUS_RECORDING, "Connecting audio");
+             if (s_audio_task) xTaskNotifyGive(s_audio_task);
+         } else {
++            if (s_stop_requested) return;
+             s_stop_reason = DD_REASON_UP;
+             device_diag_emit(DD_STOP_REQUEST, s_session, s_stop_reason, s_queued_frames,
+                              diagnostic_flags(), s_connection_epoch, duration_ms, 0, 0, 0);
+@@ -1036,6 +1068,16 @@ static void button_cb(bsp_btn_t button, bsp_btn_ev_t event, void *user)
+         }
+         return;
+     }
++    if (passvoice && edit.cancel_capture) {
++        if (!s_recording || s_stop_requested || session != s_session || epoch != s_connection_epoch) return;
++        s_stop_reason = DD_REASON_OK_LONG;
++        s_stop_requested = true;
++        device_diag_emit(DD_STOP_REQUEST, session, s_stop_reason, s_queued_frames,
++                         diagnostic_flags(), epoch, duration_ms, 0, 0, 0);
++        ui_status_set_state(UI_STATUS_PROCESSING, "Cancelling");
++        if (s_audio_task) xTaskNotifyGive(s_audio_task);
++        return;
++    }
+     const button_notification_t notification = {
+         .button = button, .action = action,
+         .duration_ms = button == BSP_BTN_DOWN && action == BUTTON_ACTION_CLICK ? 0 : duration_ms,
+@@ -1126,6 +1168,7 @@ static int access_cb(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *
+         }
+         const cJSON *host = cJSON_GetObjectItemCaseSensitive(root, "host");
+         s_passvoice_host = cJSON_IsString(host) && strcmp(host->valuestring, "passvoice") == 0;
++        s_passvoice_cancel = s_passvoice_host && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(root, "cancelVoice"));
+         s_host_ready = true;
+         s_result_pending = false;
+         device_diag_emit(DD_HOST_READY, s_session, conn, ble_att_mtu(conn), diagnostic_flags(),
+@@ -1243,6 +1286,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
+             s_conn = event->connect.conn_handle;
+             s_host_ready = false; s_control_subscribed = false; s_audio_subscribed = false;
+             s_passvoice_host = false;
++            s_passvoice_cancel = false;
+             s_result_pending = false; s_finishing = false;
+             s_hello_sent = false;
+             log_link("Connected");
+@@ -1262,6 +1306,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
+         ++s_connection_epoch;
+         s_recording = false; s_stop_requested = false; s_host_ready = false;
+         s_passvoice_host = false;
++        s_passvoice_cancel = false;
+         s_result_pending = false; s_finishing = false;
+         s_control_subscribed = false; s_audio_subscribed = false; s_conn = NO_CONN;
+         s_hello_sent = false;
+diff --git a/tests/test_button_gesture.c b/tests/test_button_gesture.c
+index 402e4a7..62c5a68 100644
+--- a/tests/test_button_gesture.c
++++ b/tests/test_button_gesture.c
+@@ -110,6 +110,30 @@ static void test_legacy_hosts_receive_only_down_click(void) {
+                .action == BUTTON_ACTION_NONE);
+ }
+
++static void test_passvoice_cancel_requires_the_same_live_session(void) {
++    const button_edit_host_t active = {.connection = 1, .passvoice = true,
++                                       .recording = true, .cancel_session = 42};
++    const button_edit_host_t stopping = {.connection = 1, .passvoice = true,
++                                         .recording = true, .stopped_session = 42};
++    button_gesture_t ok = {0}, down = {0};
++    (void)button_edit_update(&ok, BUTTON_EDGE_PRESS, 0, 650, active, true);
++    assert(button_edit_update(&ok, BUTTON_EDGE_RELEASE, 60, 650, active, true).action == BUTTON_ACTION_NONE);
++    (void)button_edit_update(&down, BUTTON_EDGE_PRESS, 0, 650, active, false);
++    assert(button_edit_update(&down, BUTTON_EDGE_LONG, 650, 650, active, false).action == BUTTON_ACTION_NONE);
++    (void)button_edit_update(&ok, BUTTON_EDGE_PRESS, 100, 650, active, true);
++    assert(button_edit_update(&ok, BUTTON_EDGE_LONG, 750, 650, active, true).cancel_capture);
++    assert(button_edit_update(&ok, BUTTON_EDGE_RELEASE, 800, 650, active, true).action == BUTTON_ACTION_NONE);
++    (void)button_edit_update(&ok, BUTTON_EDGE_PRESS, 900, 650, active, true);
++    assert(button_edit_update(&ok, BUTTON_EDGE_RELEASE, 1550, 650, stopping, true).action == BUTTON_ACTION_NONE);
++    (void)button_edit_update(&ok, BUTTON_EDGE_PRESS, 1600, 650, active, true);
++    button_edit_host_t next = active;
++    next.cancel_session = 43;
++    assert(button_edit_update(&ok, BUTTON_EDGE_RELEASE, 2250, 650, next, true).action == BUTTON_ACTION_NONE);
++    (void)button_edit_update(&ok, BUTTON_EDGE_PRESS, 2300, 650, stopping, true);
++    const button_edit_t edit = button_edit_update(&ok, BUTTON_EDGE_LONG, 2950, 650, stopping, true);
++    assert(edit.action == BUTTON_ACTION_LONG && !edit.cancel_capture && edit.required_stop == 42);
++}
++
+ int main(void) {
+     test_passvoice_reports_one_click_or_hold_per_edit_press();
+     test_passvoice_ignores_edit_presses_during_capture();
+@@ -117,6 +141,7 @@ int main(void) {
+     test_passvoice_post_stop_gesture_requires_its_normal_stop();
+     test_legacy_hosts_keep_capture_button_actions();
+     test_legacy_hosts_receive_only_down_click();
++    test_passvoice_cancel_requires_the_same_live_session();
+     assert(edge(BUTTON_EDGE_RELEASE, 0, 1) == BUTTON_ACTION_NONE);
+     // Each release acts immediately, including a second press inside 180 ms.
+     assert(edge(BUTTON_EDGE_PRESS, 20, 1) == BUTTON_ACTION_NONE);

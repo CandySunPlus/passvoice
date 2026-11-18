@@ -227,6 +227,7 @@ final class Central: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     case "host_ready":
       var command: [String: Any] = ["v": 1, "type": "host_ready"]
       if object["host"] as? String == "passvoice" { command["host"] = "passvoice" }
+      if object["cancelVoice"] as? Bool == true { command["cancelVoice"] = true }
       sendControl(command)
     case "host_state":
       guard let state = object["state"] as? String,

@@ -36,6 +36,7 @@ struct HelperCommand: Encodable {
     var deviceId: UUID?
     var state: String?
     var host: String?
+    var cancelVoice: Bool?
 }
 
 enum PassportStatus: Equatable {
@@ -98,6 +99,12 @@ final class PassportBridge {
         var stopShortcutSent = false
         var returnQueued = false
         var tracksAttributedVoice = false
+        var cancellation: Cancellation?
+    }
+
+    private enum Cancellation {
+        case observing(PassportTextState?, until: DispatchTime)
+        case deleting
     }
 
     private struct EarlyReturn {
@@ -380,7 +387,8 @@ final class PassportBridge {
             helloValidated = true
             sendHandshake(repeatReady: true)
         case "ptt_down":
-            guard isReady, capture == nil, let id = control.sessionId, id != lastSessionID else { return }
+            guard isReady, capture == nil, voiceCommitWait?.cancellation == nil,
+                  let id = control.sessionId, id != lastSessionID else { return }
             // Doubao provides no session ID for text arriving after its stop shortcut.
             // An expired Return can still leave an unresolved commit in the same field.
             let targetStillFocused = unresolvedCommitTarget?.isFocused == true
@@ -408,6 +416,19 @@ final class PassportBridge {
             statusChanged(.finishing)
             sendState("processing")
             flush(capture, now: now)
+        case "ptt_cancel":
+            guard let capture, control.sessionId == capture.id, capture.tail == nil,
+                  capture.drainDeadline == nil else { return }
+            earlyReturn = nil
+            voiceCommitWait = VoiceCommitWait(
+                deadline: now + .seconds(5), origin: capture.voiceOrigin,
+                cancellation: .observing(nil, until: now + .seconds(1))
+            )
+            statusChanged(.finishing)
+            closeCapture(preservingVoiceOrigin: true)
+            if !capture.isPlaying {
+                completeCancellation(restored: voiceCommitWait?.stopShortcutSent == true)
+            }
         case "button_event":
             guard isReady, let gesture = PassportGesture(button: control.button, event: control.event) else { return }
             let action = resolveAction(gesture)
@@ -452,6 +473,7 @@ final class PassportBridge {
 
     private func perform(_ action: PassportAction) {
         if let wait = voiceCommitWait {
+            guard wait.cancellation == nil else { return }
             // The audio can be ready while Doubao is still editing. Keep direct
             // keystrokes out of that window even when attribution was lost.
             if action == .returnKey { voiceCommitWait?.returnQueued = true }
@@ -481,11 +503,19 @@ final class PassportBridge {
     private func checkVoiceCommit(now: DispatchTime) {
         guard let wait = voiceCommitWait else { return }
         guard now < wait.deadline else {
+            if wait.cancellation != nil {
+                completeCancellation(restored: false)
+                return
+            }
             voiceCommitWait = nil
             if wait.tracksAttributedVoice { committedVoiceInput?.finishAttribution() }
             if let target = unresolvedCommitTarget, committedVoiceInput?.target !== target {
                 target.stopMonitoringInput()
             }
+            return
+        }
+        if let cancellation = wait.cancellation {
+            checkCancellation(wait, progress: cancellation, now: now)
             return
         }
         guard wait.stopShortcutSent, !wait.tracksAttributedVoice, let origin = wait.origin else { return }
@@ -519,6 +549,49 @@ final class PassportBridge {
         }
     }
 
+    private func checkCancellation(_ wait: VoiceCommitWait, progress: Cancellation, now: DispatchTime) {
+        guard case let .observing(candidate, until) = progress, wait.stopShortcutSent,
+              let origin = wait.origin, let current = origin.snapshot() else { return }
+        guard current.composition != .composing else {
+            voiceCommitWait?.cancellation = .observing(nil, until: now + .seconds(1))
+            return
+        }
+        if current.composition == .unknown || current.hasSameText(as: origin.baseline) {
+            // Without a clear commit signal, Doubao can still revise the visible
+            // text after its stop shortcut. Wait for the same complete snapshot.
+            if candidate != current {
+                voiceCommitWait?.cancellation = .observing(current, until: now + .seconds(1))
+                return
+            }
+            guard now >= until else { return }
+        }
+        if current.hasSameText(as: origin.baseline), current.selectedRange == origin.baseline.selectedRange {
+            if current.composition == .clear { completeCancellation(restored: true) }
+            return
+        }
+        guard current.composition == .clear || origin.target.canDeleteAttributedVoiceText,
+              let range = origin.insertedRange(in: current),
+              let originalSelection = origin.baseline.indices(of: origin.baseline.selectedRange),
+              trackVoiceInput(in: origin.target, snapshot: current, range: range) else { return }
+        voiceCommitWait?.cancellation = .deleting
+        deleteVoiceInput(restoring: String(origin.baseline.text[originalSelection]))
+    }
+
+    private func completeCancellation(restored: Bool) {
+        voiceCommitWait = nil
+        if restored {
+            unresolvedCommitTarget = nil
+            log("Passport voice session cancelled")
+        } else {
+            unresolvedCommitTarget?.stopMonitoringInput()
+            log("Unable to verify removal of the cancelled Passport voice input")
+        }
+        if isReady {
+            sendState("ready")
+            statusChanged(.ready)
+        }
+    }
+
     @discardableResult
     private func trackVoiceInput(in target: PassportVoiceTarget, snapshot: PassportTextState, range: NSRange,
                                  voiceBaseline: PassportTextState? = nil) -> Bool {
@@ -531,14 +604,18 @@ final class PassportBridge {
         return true
     }
 
-    private func deleteVoiceInput() {
+    private func deleteVoiceInput(restoring text: String = "") {
         guard let committed = committedVoiceInput else { return }
         committedVoiceInput = nil
         guard !committed.inputPending else { return }
         let target = committed.target
         do {
-            try target.delete(committed.range, ifSnapshotIs: committed.snapshot) { [weak self, weak target] in
+            try target.replace(committed.range, with: text, ifSnapshotIs: committed.snapshot) { [weak self, weak target] in
                 guard let self, let target, self.unresolvedCommitTarget === target else { return }
+                if self.voiceCommitWait?.cancellation != nil {
+                    self.completeCancellation(restored: true)
+                    return
+                }
                 self.unresolvedCommitTarget = nil
                 if self.voiceCommitWait?.tracksAttributedVoice == true { self.voiceCommitWait = nil }
             }
@@ -612,7 +689,7 @@ final class PassportBridge {
             try capture.playback.drain { [weak self, weak capture] in
                 guard let self, let capture, self.capture === capture else { return }
                 self.log("Passport session \(capture.id) drained \(capture.frames.next) frames (\(capture.frames.missing) silence replacements)")
-                self.closeCapture(endingNormally: capture.tail != nil)
+                self.closeCapture(preservingVoiceOrigin: capture.tail != nil)
                 if self.isReady {
                     self.sendState("ready")
                     self.statusChanged(.ready)
@@ -631,11 +708,11 @@ final class PassportBridge {
         resetPassport()
     }
 
-    private func closeCapture(endingNormally: Bool = false) {
+    private func closeCapture(preservingVoiceOrigin: Bool = false) {
         guard let capture else { return }
         self.capture = nil
         capture.playback.stop()
-        let canConfirmCommit = endingNormally && voiceCommitWait?.origin?.canObserveAfterStop == true
+        let canConfirmCommit = preservingVoiceOrigin && voiceCommitWait?.origin?.canObserveAfterStop == true
         if !canConfirmCommit { voiceCommitWait?.origin = nil }
         do {
             if let tapVoiceKey {
@@ -654,7 +731,7 @@ final class PassportBridge {
         guard subscribed, helloValidated, capture == nil, readiness != .awaitingAcknowledgment,
               !isReady || repeatReady else { return }
         if !isReady { readiness = .awaitingAcknowledgment }
-        send(HelperCommand(type: "host_ready", host: "passvoice"))
+        send(HelperCommand(type: "host_ready", host: "passvoice", cancelVoice: tapVoiceKey == nil ? nil : true))
     }
 
     private func resetPassport() {
