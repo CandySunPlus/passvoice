@@ -208,7 +208,7 @@ final class VoiceDraftPanel: NSPanel {
     }
 
     private static func keyHint(_ key: String, label: String, accessibilityLabel: String) -> NSView {
-        let cap = DraftKeyCap(key: key)
+        let cap = PassportKeyCap(key: key, width: key == "OK" ? 25 : 20)
         let title = NSTextField(labelWithString: label)
         title.font = .systemFont(ofSize: 11, weight: .medium)
         title.textColor = .labelColor
@@ -236,10 +236,10 @@ final class VoiceDraftTextView: NSTextView {
     }
 }
 
-private final class DraftKeyCap: NSView {
+final class PassportKeyCap: NSView {
     private let title: NSTextField
 
-    init(key: String) {
+    init(key: String, width: CGFloat, height: CGFloat = 19) {
         title = NSTextField(labelWithString: key)
         super.init(frame: .zero)
         title.font = .monospacedSystemFont(ofSize: 10, weight: .semibold)
@@ -247,8 +247,8 @@ private final class DraftKeyCap: NSView {
         title.translatesAutoresizingMaskIntoConstraints = false
         addSubview(title)
         NSLayoutConstraint.activate([
-            widthAnchor.constraint(equalToConstant: key == "OK" ? 25 : 20),
-            heightAnchor.constraint(equalToConstant: 19),
+            widthAnchor.constraint(equalToConstant: width),
+            heightAnchor.constraint(equalToConstant: height),
             title.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 5),
             title.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -5),
             title.centerXAnchor.constraint(equalTo: centerXAnchor),

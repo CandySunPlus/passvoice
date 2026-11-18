@@ -11,8 +11,13 @@ final class PassportButtonSettings: NSWindowController, NSWindowDelegate {
         (.undo, "撤销（⌘Z）", "arrow.uturn.backward"), (.none, "不执行", "minus.circle"),
     ]
 
+    private static let pickerWidth: CGFloat = 168
+    private static let buttonSize: CGFloat = 32
+    private static let controlSpacing: CGFloat = 10
+
     private let bindings: PassportButtonBindings
-    private let capturePrompt = NSTextField(labelWithString: "按下要绑定的快捷键")
+    private let capturePrompt = NSTextField(labelWithString: "")
+    private let captureIcon = NSImageView()
     private var controls: [PassportGesture: (choice: NSPopUpButton, record: NSButton)] = [:]
     private var capturing: PassportGesture?
     private var pendingShortcut: (key: PassportKeystroke, name: String)?
@@ -23,15 +28,64 @@ final class PassportButtonSettings: NSWindowController, NSWindowDelegate {
         let window = NSWindow(contentRect: .zero, styleMask: [.titled, .closable], backing: .buffered, defer: false)
         super.init(window: window)
         window.title = "按键设置"
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
         window.delegate = self
         window.isReleasedWhenClosed = false
+        window.contentView = makeContent()
+        refreshControls()
+        window.setContentSize(window.contentView?.fittingSize ?? .zero)
+        window.center()
+    }
 
+    required init?(coder: NSCoder) { nil }
+
+    private func makeContent() -> NSView {
+        let title = NSTextField(labelWithString: "按键设置")
+        title.font = .systemFont(ofSize: 24, weight: .semibold)
+        let icon = NSImageView(image: NSApp.applicationIconImage)
+        icon.imageScaling = .scaleProportionallyUpOrDown
+        icon.widthAnchor.constraint(equalToConstant: 36).isActive = true
+        icon.heightAnchor.constraint(equalTo: icon.widthAnchor).isActive = true
+        let heading = NSStackView(views: [icon, title])
+        heading.alignment = .centerY
+        heading.spacing = 10
+
+        let restore = Self.iconButton("arrow.counterclockwise", target: self, action: #selector(restoreDefaults))
+        restore.toolTip = "恢复默认设置"
+        restore.setAccessibilityLabel("恢复默认设置")
+        let header = Self.pairedRow(heading, restore, height: 38, trailingWidth: Self.buttonSize)
+
+        capturePrompt.font = .systemFont(ofSize: 12)
+        captureIcon.symbolConfiguration = .init(pointSize: 12, weight: .medium)
+        let footer = NSStackView(views: [captureIcon, capturePrompt])
+        footer.alignment = .centerY
+        footer.spacing = 7
+        let footerRow = Self.pairedRow(footer, NSView(), height: 20, trailingWidth: 0)
+
+        let content = Self.verticalStack([header, makeMappings(), footerRow], spacing: 14)
+        content.widthAnchor.constraint(equalToConstant: 448).isActive = true
+        let root = NSView()
+        Self.pin(content, to: root, horizontal: 24, vertical: 18)
+        return root
+    }
+
+    private func makeMappings() -> NSView {
+        let actionWidth = Self.pickerWidth + Self.controlSpacing + Self.buttonSize
+        let labels = Self.pairedRow(Self.columnLabel("手势"), Self.columnLabel("动作"),
+                                    height: 30, trailingWidth: actionWidth)
         let rows = Self.gestures.map { gesture, button, press in
-            let key = NSTextField(labelWithString: button)
-            key.font = .systemFont(ofSize: 12, weight: .semibold)
+            let key = PassportKeyCap(key: button, width: 52, height: 23)
             let gestureLabel = NSTextField(labelWithString: press)
-            gestureLabel.textColor = .secondaryLabelColor
+            gestureLabel.font = .systemFont(ofSize: 13, weight: .medium)
+            let trigger = NSStackView(views: [key, gestureLabel])
+            trigger.alignment = .centerY
+            trigger.spacing = 10
+
             let choice = NSPopUpButton(frame: .zero, pullsDown: false)
+            choice.controlSize = .regular
+            choice.imagePosition = .imageLeft
+            choice.widthAnchor.constraint(equalToConstant: Self.pickerWidth).isActive = true
             choice.setAccessibilityLabel("\(button) \(press)动作")
             choice.target = self
             choice.action = #selector(changeBinding(_:))
@@ -39,56 +93,45 @@ final class PassportButtonSettings: NSWindowController, NSWindowDelegate {
                 choice.addItem(withTitle: title)
                 choice.lastItem?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
             }
-            let record = NSButton(title: "", target: self, action: #selector(toggleRecording(_:)))
-            record.bezelStyle = .rounded
-            record.imagePosition = .imageOnly
-            controls[gesture] = (choice, record)
-            return Self.tableRow([key, gestureLabel, choice, record], height: 42)
-        }
-        let columns = Self.tableRow([Self.columnLabel("手势"), NSView(), Self.columnLabel("动作"), NSView()], height: 26)
-        let table = Self.verticalStack([columns] + rows.flatMap { [Self.separator(), $0] }, spacing: 0)
 
+            let record = Self.iconButton("keyboard", target: self, action: #selector(toggleRecording(_:)))
+            controls[gesture] = (choice, record)
+            let actions = NSStackView(views: [choice, record])
+            actions.alignment = .centerY
+            actions.spacing = Self.controlSpacing
+            return Self.pairedRow(trigger, actions, height: 47, trailingWidth: actionWidth)
+        }
+
+        let table = Self.verticalStack([labels] + rows.flatMap { [Self.separator(), $0] }, spacing: 0)
         let panel = NSBox()
         panel.boxType = .custom
-        panel.cornerRadius = 12
+        panel.cornerRadius = 17
         panel.fillColor = .controlBackgroundColor
         panel.borderColor = .separatorColor
         panel.borderWidth = 0.5
         panel.contentViewMargins = .zero
-        let tableSurface = NSView()
-        panel.contentView = tableSurface
-        Self.pin(table, to: tableSurface, horizontal: 16, vertical: 10)
-
-        let title = NSTextField(labelWithString: "按键设置")
-        title.font = .systemFont(ofSize: 24, weight: .semibold)
-        let restore = NSButton(image: NSImage(systemSymbolName: "arrow.counterclockwise", accessibilityDescription: nil)!,
-                               target: self, action: #selector(restoreDefaults))
-        restore.bezelStyle = .rounded
-        restore.imagePosition = .imageOnly
-        restore.widthAnchor.constraint(equalToConstant: 32).isActive = true
-        restore.toolTip = "恢复默认设置"
-        restore.setAccessibilityLabel("恢复默认设置")
-        let header = NSStackView(views: [title, NSView(), restore])
-        header.alignment = .centerY
-        let subtitle = NSTextField(labelWithString: "为 Passport 的 DOWN 和 OK 绑定动作。")
-        subtitle.alignment = .left
-        subtitle.textColor = .secondaryLabelColor
-        let description = NSView()
-        Self.pin(subtitle, to: description, horizontal: 0, vertical: 0)
-        capturePrompt.textColor = .secondaryLabelColor
-        let footer = NSView()
-        Self.pin(capturePrompt, to: footer, horizontal: 0, vertical: 0)
-        let content = Self.verticalStack([header, description, panel, footer], spacing: 12)
-        content.setCustomSpacing(18, after: description)
-        let root = NSView()
-        Self.pin(content, to: root, horizontal: 24, vertical: 20)
-        window.contentView = root
-        refreshControls()
-        window.setContentSize(root.fittingSize)
-        window.center()
+        let surface = NSView()
+        panel.contentView = surface
+        Self.pin(table, to: surface, horizontal: 16, vertical: 6)
+        return panel
     }
 
-    required init?(coder: NSCoder) { nil }
+    private static func iconButton(_ symbol: String, target: AnyObject, action: Selector) -> NSButton {
+        let button = NSButton(title: "", target: target, action: action)
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        button.symbolConfiguration = .init(pointSize: 13, weight: .medium)
+        button.imagePosition = .imageOnly
+        button.contentTintColor = .labelColor
+        button.bezelStyle = .push
+        #if compiler(>=6.2)
+        if #available(macOS 26, *) {
+            button.borderShape = .circle
+        }
+        #endif
+        button.widthAnchor.constraint(equalToConstant: buttonSize).isActive = true
+        button.heightAnchor.constraint(equalToConstant: buttonSize).isActive = true
+        return button
+    }
 
     private static func verticalStack(_ views: [NSView], spacing: CGFloat) -> NSStackView {
         let stack = NSStackView(views: views)
@@ -99,15 +142,22 @@ final class PassportButtonSettings: NSWindowController, NSWindowDelegate {
         return stack
     }
 
-    private static func tableRow(_ cells: [NSView], height: CGFloat) -> NSStackView {
-        let row = NSStackView(views: cells)
-        row.spacing = 12
-        row.alignment = .centerY
-        row.heightAnchor.constraint(equalToConstant: height).isActive = true
-        let columnWidths: [CGFloat] = [64, 98, 330, 32]
-        for (cell, width) in zip(cells, columnWidths) {
-            cell.widthAnchor.constraint(equalToConstant: width).isActive = true
+    private static func pairedRow(_ leading: NSView, _ trailing: NSView,
+                                  height: CGFloat, trailingWidth: CGFloat) -> NSView {
+        let row = NSView()
+        for view in [leading, trailing] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            row.addSubview(view)
         }
+        NSLayoutConstraint.activate([
+            row.heightAnchor.constraint(equalToConstant: height),
+            leading.leadingAnchor.constraint(equalTo: row.leadingAnchor),
+            leading.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            trailing.trailingAnchor.constraint(equalTo: row.trailingAnchor),
+            trailing.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            trailing.widthAnchor.constraint(equalToConstant: trailingWidth),
+            trailing.leadingAnchor.constraint(greaterThanOrEqualTo: leading.trailingAnchor, constant: 12),
+        ])
         return row
     }
 
@@ -142,6 +192,7 @@ final class PassportButtonSettings: NSWindowController, NSWindowDelegate {
     }
 
     private func refreshControls() {
+        let recording = Self.gestures.first { $0.gesture == capturing }
         for (gesture, button, press) in Self.gestures {
             guard let row = controls[gesture] else { continue }
             let action = bindings.action(for: gesture)
@@ -149,7 +200,7 @@ final class PassportButtonSettings: NSWindowController, NSWindowDelegate {
                 row.choice.removeItem(at: Self.actions.count)
             }
             if case let .shortcut(key, name) = action {
-                row.choice.addItem(withTitle: "自定义（\(Self.shortcutTitle(key, name: name))）")
+                row.choice.addItem(withTitle: Self.shortcutTitle(key, name: name))
                 row.choice.lastItem?.image = NSImage(systemSymbolName: "keyboard", accessibilityDescription: nil)
                 row.choice.selectItem(at: Self.actions.count)
             } else if let index = Self.actions.firstIndex(where: { $0.action == action }) {
@@ -158,10 +209,20 @@ final class PassportButtonSettings: NSWindowController, NSWindowDelegate {
             let recording = capturing == gesture
             let hint = recording ? "取消录入" : "录入快捷键"
             row.record.image = NSImage(systemSymbolName: recording ? "xmark" : "keyboard", accessibilityDescription: nil)
+            row.record.contentTintColor = recording ? .controlAccentColor : .labelColor
             row.record.toolTip = hint
             row.record.setAccessibilityLabel("\(button) \(press) \(hint)")
         }
-        capturePrompt.isHidden = capturing == nil
+        let color: NSColor = recording == nil ? .secondaryLabelColor : .controlAccentColor
+        capturePrompt.textColor = color
+        captureIcon.contentTintColor = color
+        captureIcon.image = NSImage(systemSymbolName: recording == nil ? "keyboard" : "record.circle",
+                                    accessibilityDescription: nil)
+        if let recording {
+            capturePrompt.stringValue = "\(recording.button) \(recording.press) · 按下快捷键，或点击 × 取消"
+        } else {
+            capturePrompt.stringValue = "点击右侧键盘图标，录入自定义快捷键"
+        }
     }
 
     @objc private func changeBinding(_ sender: NSPopUpButton) {
