@@ -43,10 +43,13 @@ cd ../vokie-ai-passport-firmware
 git checkout --detach 0e3543259f578f5d5678a58edecca5c8bb81e927
 git am "$passvoice_repo/firmware/0001-passvoice-up-only.patch" \
   "$passvoice_repo/firmware/0002-passvoice-down-hold.patch" \
-  "$passvoice_repo/firmware/0003-passvoice-deliver-gestures-from-worker.patch"
+  "$passvoice_repo/firmware/0003-passvoice-deliver-gestures-from-worker.patch" \
+  "$passvoice_repo/firmware/0004-passvoice-resume-audio-link.patch"
 . /path/to/esp-idf-v5.5.3/export.sh
 ./tools/validate.sh
 ```
+
+固件保留空闲 20 秒后的 90–120 ms 低功耗 BLE 间隔。编辑按键唤醒后，若连接已满足空闲间隔，就不再重复请求更新；下次 UP 会恢复 15 ms 音频间隔，避免冗余更新阻塞后出现 `Slow BLE`。
 
 验证通过后，可用 AI Passport 小程序安装生成的 `build/FoloToy-AI-Passport-full.bin`。 [固件安装与分区约定](https://github.com/CandySunPlus/vokie-ai-passport-firmware/blob/0e3543259f578f5d5678a58edecca5c8bb81e927/docs/development/engineering/ble-recovery-compatibility.zh_CN.md)
 
@@ -76,6 +79,7 @@ swift build -c release
 
 运行 `./scripts/test` 可验证按键绑定、文字确认与删除、握手、会话顺序、尾帧和重连逻辑。
 
+- 连接后空闲至少 20 秒，短按 DOWN、OK 等编辑按键，再空闲至少 20 秒。按 UP 开始说话，检查没有出现 `Slow BLE`，再次按 UP 后文字正常提交。再空闲并重复一次，检查低功耗待机后仍可开始录音。
 - 对同一设备做两次 `UP → 说话 → UP`。检查文字是否出现在光标处，每次说话的首尾是否完整。
 - 空闲时短按 DOWN，检查是否收到一次回车。用 UP 停止较长的语音后立即短按 DOWN，检查是否先落字，再收到一次回车。在等待期间切换到另一个输入框，检查新输入框没有收到回车。
 - 空闲时短按 OK，检查是否退格一次。长按 DOWN，检查默认不执行。分别修改四个手势的绑定，检查每次按压只执行对应动作一次。录音时重复四种手势，再按 UP 结束，检查录音完整且手势未执行。恢复默认设置后复查四种手势。

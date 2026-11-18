@@ -1,0 +1,458 @@
+From 3fc499ff87ca04d1b0b9ec36818600f5d1b12192 Mon Sep 17 00:00:00 2001
+From: NikSun <candysfm@gmail.com>
+Date: Wed, 18 Nov 2026 10:51:55 +0800
+Subject: [PATCH] fix(ble): resume audio without redundant idle updates
+
+Edit activity reset the idle attempt guard while leaving the link at 120 ms. A repeated idle update could hold NimBLE pending for 40 seconds, causing every audio request to return EALREADY until capture timed out.
+
+Reuse the negotiated idle link and track only accepted idle updates. Exercise the worker policy with a fake BLE host and clock: the captured edit/idle/UP sequence now resumes at 220 ms instead of failing at 1500 ms. Keep the low-power interval, retry deadline, and cancellation behavior.
+---
+ docs/CHANGELOG.md           |   2 +
+ docs/CHANGELOG.zh_CN.md     |   2 +
+ main/CMakeLists.txt         |   2 +-
+ main/ble_audio_link.c       |  53 +++++++++++++++
+ main/ble_audio_link.h       |  33 ++++++++++
+ main/vokie_ble.c            |  91 ++++++++++++-------------
+ tests/test_ble_audio_link.c | 128 ++++++++++++++++++++++++++++++++++++
+ tools/validate.sh           |   4 ++
+ 8 files changed, 269 insertions(+), 46 deletions(-)
+ create mode 100644 main/ble_audio_link.c
+ create mode 100644 main/ble_audio_link.h
+ create mode 100644 tests/test_ble_audio_link.c
+
+diff --git a/docs/CHANGELOG.md b/docs/CHANGELOG.md
+index 92462b1..a97496e 100644
+--- a/docs/CHANGELOG.md
++++ b/docs/CHANGELOG.md
+@@ -6,6 +6,8 @@
+
+ ## Unreleased
+
++- Avoid redundant BLE idle updates when the negotiated link already uses 90–120 ms. After edit-button activity, the next UP can restore the 15 ms audio interval without being blocked by a redundant 40-second connection update. Track only accepted idle updates while preserving the 1500 ms audio-start deadline and low-power standby policy.
++
+ - Report a 650 ms DOWN hold to PassVoice as a BLE V1 button event, including a hold immediately following a tap. Each press reports at most one gesture. Other hosts still receive only DOWN clicks.
+
+ - Let PassVoice opt in to an UP-only capture policy. Ignore DOWN and OK during capture, including a press released after the stop, and report a fresh press immediately after UP with the stopped session ID if its end notification is still pending. Other hosts keep their existing button behavior.
+diff --git a/docs/CHANGELOG.zh_CN.md b/docs/CHANGELOG.zh_CN.md
+index 07982de..d0533b0 100644
+--- a/docs/CHANGELOG.zh_CN.md
++++ b/docs/CHANGELOG.zh_CN.md
+@@ -6,6 +6,8 @@
+
+ ## Unreleased
+
++- 当协商后的 BLE 间隔已为 90–120 ms 时，不重复请求空闲更新。编辑按键活动后，下次 UP 可恢复 15 ms 音频间隔，避免被冗余的 40 秒连接更新阻塞。只跟踪实际接受的空闲更新，保留 1500 ms 音频启动期限及低功耗待机策略。
++
+ - 通过 BLE V1 按键事件向 PassVoice 上报 650 ms 的 DOWN 长按，紧接短按的长按也可识别。每次按压最多上报一种手势。其它主机仍只收到 DOWN 短按。
+
+ - PassVoice 可启用仅由 UP 控制采集的按键模式。采集中按下 DOWN 或 OK 会被忽略，即使结束采集后才松手；UP 结束采集后可立即触发新的按压，如果结束通知仍在发送，则附带已停止的会话 ID。其它主机的按键行为保持不变。
+diff --git a/main/CMakeLists.txt b/main/CMakeLists.txt
+index 4b75613..6ffb639 100644
+--- a/main/CMakeLists.txt
++++ b/main/CMakeLists.txt
+@@ -1,5 +1,5 @@
+ idf_component_register(
+-    SRCS "main.c" "vokie_ble.c" "ble_tx_retry.c" "ble_capture_end.c" "ble_audio_mbuf.c" "device_diag.c" "diag_journal.c"
++    SRCS "main.c" "vokie_ble.c" "ble_tx_retry.c" "ble_capture_end.c" "ble_audio_mbuf.c" "ble_audio_link.c" "device_diag.c" "diag_journal.c"
+          "ui_status.c" "boot_sound.c" "usb_standby.c"
+          "../assets/fonts/vokie_title_barlow_condensed_bold_22.c"
+     INCLUDE_DIRS "." "../assets/fonts"
+diff --git a/main/ble_audio_link.c b/main/ble_audio_link.c
+new file mode 100644
+index 0000000..d4af400
+--- /dev/null
++++ b/main/ble_audio_link.c
+@@ -0,0 +1,53 @@
++#include "ble_audio_link.h"
++
++int ble_audio_link_idle(ble_audio_link_t *state, const ble_audio_link_ops_t *ops)
++{
++    const uint32_t update = ops->updates(ops->context);
++    if (state->idle_update != update) state->idle_pending = false;
++    // Edits restart the idle timer without changing the negotiated interval.
++    // A redundant update can occupy NimBLE's one pending procedure until its
++    // 40-second timeout, preventing the following UP from requesting audio.
++    if (ops->matches(ops->context, true)) {
++        state->slowed = true;
++        return 0;
++    }
++    const int rc = ops->request(ops->context, true);
++    if (rc == 0) {
++        state->slowed = true;
++        state->idle_pending = true;
++        state->idle_update = update;
++    }
++    return rc;
++}
++
++bool ble_audio_link_prepare(ble_audio_link_t *state, const ble_audio_link_ops_t *ops)
++{
++    void *context = ops->context;
++    if (!state->slowed) {
++        if (!ops->matches(context, false)) (void)ops->request(context, false);
++        return true;
++    }
++    const uint32_t start = ops->now_ms(context);
++    uint32_t last_request = start - BLE_LINK_RETRY_MS;
++    bool pending = false;
++    state->idle_pending = state->idle_pending && state->idle_update == ops->updates(context);
++    uint32_t requested_at_update = 0;
++    do {
++        if (!ops->valid(context)) return false;
++        if (pending && requested_at_update != ops->updates(context)) pending = false;
++        if (state->idle_pending && state->idle_update != ops->updates(context)) state->idle_pending = false;
++        if (!pending && !state->idle_pending && ops->matches(context, false)) return true;
++        const uint32_t now = ops->now_ms(context);
++        if (!pending && now - last_request >= BLE_LINK_RETRY_MS) {
++            last_request = now;
++            requested_at_update = ops->updates(context);
++            const int rc = ops->request(context, false);
++            if (rc == 0) {
++                state->idle_pending = false;
++                pending = true;
++            }
++        }
++        ops->wait_ms(context, 20);
++    } while (ops->now_ms(context) - start < BLE_AUDIO_LINK_TIMEOUT_MS);
++    return false;
++}
+diff --git a/main/ble_audio_link.h b/main/ble_audio_link.h
+new file mode 100644
+index 0000000..978d71b
+--- /dev/null
++++ b/main/ble_audio_link.h
+@@ -0,0 +1,33 @@
++#pragma once
++
++#include <stdbool.h>
++#include <stdint.h>
++
++#define BLE_AUDIO_LINK_TIMEOUT_MS 1500
++#define BLE_LINK_RETRY_MS 250
++
++// Owned by the audio worker; reset when the connection epoch changes.
++typedef struct {
++    bool slowed;
++    bool idle_pending;
++    uint32_t idle_update;
++} ble_audio_link_t;
++
++// Boundary to the BLE host, capture identity, and worker clock. valid() must
++// reject a disconnected/replaced link or a stopped/replaced capture.
++typedef struct {
++    void *context;
++    bool (*valid)(void *context);
++    bool (*matches)(void *context, bool idle);
++    int (*request)(void *context, bool idle);
++    uint32_t (*updates)(void *context);
++    uint32_t (*now_ms)(void *context);
++    void (*wait_ms)(void *context, uint32_t delay_ms);
++} ble_audio_link_ops_t;
++
++// Return the BLE host result (zero also means the idle link is satisfied).
++int ble_audio_link_idle(ble_audio_link_t *state, const ble_audio_link_ops_t *ops);
++
++// Restore an idle link before capture, bounded by BLE_AUDIO_LINK_TIMEOUT_MS.
++// An unmodified initial link keeps the existing best-effort audio request.
++bool ble_audio_link_prepare(ble_audio_link_t *state, const ble_audio_link_ops_t *ops);
+diff --git a/main/vokie_ble.c b/main/vokie_ble.c
+index c2ebae7..8aae96b 100644
+--- a/main/vokie_ble.c
++++ b/main/vokie_ble.c
+@@ -12,6 +12,7 @@
+ #include "ble_tx_retry.h"
+ #include "ble_capture_end.h"
+ #include "ble_audio_mbuf.h"
++#include "ble_audio_link.h"
+ #include "device_diag.h"
+ #include "standby_policy.h"
+ #include "ui_idle.h"
+@@ -55,8 +56,6 @@ static const uint16_t NO_CONN = BLE_HS_CONN_HANDLE_NONE;
+ #define AUDIO_TX_TIMEOUT_MS 80
+ #define CONTROL_TX_TIMEOUT_MS 200
+ #define TX_RETRY_INTERVAL_MS 5
+-#define AUDIO_LINK_TIMEOUT_MS 1500
+-#define LINK_RETRY_MS 250
+ #define SLEEP_RECHECK_MS 5000
+ #define BUTTON_QUEUE_LENGTH 8
+ #define SERVICE_BYTES 0x00,0x45,0x49,0x4b,0x4f,0x56,0x1a,0x9d,0x6f,0x4b,0x7b,0x6a,0x01,0x00,0x0e,0x7f
+@@ -402,40 +401,38 @@ static bool link_matches(uint16_t conn, bool idle)
+            vokie_link_matches(idle, desc.conn_itvl, desc.conn_latency);
+ }
+
+-static bool prepare_audio_link(uint32_t session, uint32_t epoch, bool slowed, uint32_t idle_update)
++typedef struct {
++    uint16_t conn;
++    uint32_t session, epoch;
++} audio_link_context_t;
++
++static bool audio_link_valid(void *arg)
+ {
+-    // If we requested a slow link, an apparently fast reading may precede
+-    // completion of that request. Wait for the update before trusting it.
+-    if (!slowed) {
+-        if (!link_matches(s_conn, false)) (void)request_link(s_conn, false);
+-        return true;
+-    }
+-    uint32_t start = tx_now_ms(NULL);
+-    uint32_t last_request = start - LINK_RETRY_MS;
+-    bool pending = false;
+-    bool idle_pending = idle_update == s_link_update_count;
+-    uint32_t requested_at_update = 0;
+-    do {
+-        if (!s_recording || session != s_session || epoch != s_connection_epoch) return false;
+-        const uint16_t conn = s_conn;
+-        if (conn == NO_CONN) return false;
+-        if (pending && requested_at_update != s_link_update_count) pending = false;
+-        if (idle_pending && idle_update != s_link_update_count) idle_pending = false;
+-        if (!pending && !idle_pending && link_matches(conn, false)) return true;
+-        const uint32_t now = tx_now_ms(NULL);
+-        if (!pending && now - last_request >= LINK_RETRY_MS) {
+-            last_request = now;
+-            requested_at_update = s_link_update_count;
+-            const int rc = request_link(conn, false);
+-            // EALREADY can be an earlier idle or central-initiated request.
+-            if (rc == 0) {
+-                idle_pending = false;
+-                pending = true;
+-            }
+-        }
+-        tx_wait_ms(NULL, 20);
+-    } while (tx_now_ms(NULL) - start < AUDIO_LINK_TIMEOUT_MS);
+-    return false;
++    const audio_link_context_t *link = arg;
++    return link->conn != NO_CONN && link->conn == s_conn && s_recording &&
++           link->session == s_session && link->epoch == s_connection_epoch;
++}
++
++static bool audio_link_matches(void *arg, bool idle)
++{
++    return link_matches(((audio_link_context_t *)arg)->conn, idle);
++}
++
++static int audio_link_request(void *arg, bool idle)
++{
++    return request_link(((audio_link_context_t *)arg)->conn, idle);
++}
++
++static uint32_t audio_link_updates(void *arg)
++{
++    (void)arg;
++    return s_link_update_count;
++}
++
++static ble_audio_link_ops_t audio_link_ops(audio_link_context_t *context)
++{
++    return (ble_audio_link_ops_t){context, audio_link_valid, audio_link_matches,
++        audio_link_request, audio_link_updates, tx_now_ms, tx_wait_ms};
+ }
+
+ static bool voice_busy(void)
+@@ -674,14 +671,16 @@ static void audio_task(void *arg)
+     bool end_logged = false;
+     uint32_t idle_pause_failures = 0, idle_error_ms = 0;
+     bool capturing = false;
+-    uint32_t link_epoch = 0, idle_update = 0;
+-    bool idle_attempted = false, slowed = false, active_requested = false;
++    uint32_t link_epoch = 0;
++    ble_audio_link_t link_state = {0};
++    bool idle_attempted = false, active_requested = false;
+     bool audio_paused = false;
+     for (;;) {
+         if (link_epoch != s_connection_epoch) {
+             link_epoch = s_connection_epoch;
+             delivered_stop = 0;
+-            idle_attempted = slowed = active_requested = false;
++            idle_attempted = active_requested = false;
++            link_state = (ble_audio_link_t){0};
+         }
+         if (!s_recording) {
+             // Post-UP gestures stay in the queue until this worker has sent ptt_up.
+@@ -724,11 +723,11 @@ static void audio_task(void *arg)
+             if (!voice_busy()) {
+                 if (elapsed >= idle_ms) {
+                     if (host_is_ready() && !idle_attempted) {
+-                        idle_update = s_link_update_count;
+-                        const int rc = request_link(conn, true);
+-                        if (rc == BLE_HS_EALREADY) wait_ms = LINK_RETRY_MS;
++                        audio_link_context_t context = {conn, s_session, s_connection_epoch};
++                        const ble_audio_link_ops_t ops = audio_link_ops(&context);
++                        const int rc = ble_audio_link_idle(&link_state, &ops);
++                        if (rc == BLE_HS_EALREADY) wait_ms = BLE_LINK_RETRY_MS;
+                         idle_attempted = rc != BLE_HS_EALREADY;
+-                        if (rc == 0) slowed = true;
+                     }
+                     if (vokie_deep_sleep_due(now, activity, voice_busy(),
+                                              usb_standby_console_active())) {
+@@ -740,7 +739,7 @@ static void audio_task(void *arg)
+                 } else {
+                     wait_ms = idle_ms - elapsed;
+                     idle_attempted = false;
+-                    if (host_is_ready() && !active_requested && !slowed) {
++                    if (host_is_ready() && !active_requested && !link_state.slowed) {
+                         active_requested = true;
+                         if (!link_matches(conn, false)) (void)request_link(conn, false);
+                     }
+@@ -773,9 +772,11 @@ static void audio_task(void *arg)
+             s_queued_frames = 0;
+             max_read_us = 0; max_tx_ms = 0; max_gap_ms = 0;
+             capture_ms = tx_now_ms(NULL); last_frame_ms = capture_ms; diag_ms = capture_ms;
+-            const bool link_ready = prepare_audio_link(capture_session, capture_epoch, slowed, idle_update);
++            audio_link_context_t context = {s_conn, capture_session, capture_epoch};
++            const ble_audio_link_ops_t ops = audio_link_ops(&context);
++            const bool link_ready = ble_audio_link_prepare(&link_state, &ops);
+             audio_paused = false;
+-            slowed = !link_ready;
++            link_state.slowed = !link_ready;
+             idle_attempted = false;
+             active_requested = link_ready;
+             if (!link_ready) {
+diff --git a/tests/test_ble_audio_link.c b/tests/test_ble_audio_link.c
+new file mode 100644
+index 0000000..c49340c
+--- /dev/null
++++ b/tests/test_ble_audio_link.c
+@@ -0,0 +1,128 @@
++#include "ble_audio_link.h"
++#include "standby_policy.h"
++#include <assert.h>
++#include <stdio.h>
++
++typedef struct {
++    uint32_t now, updates, complete_at, cancel_at;
++    uint16_t interval, target;
++    bool pending, valid;
++} host_t;
++
++static bool valid(void *arg) { return ((host_t *)arg)->valid; }
++static bool matches(void *arg, bool idle)
++{
++    return vokie_link_matches(idle, ((host_t *)arg)->interval, 0);
++}
++static uint32_t updates(void *arg) { return ((host_t *)arg)->updates; }
++static uint32_t now_ms(void *arg) { return ((host_t *)arg)->now; }
++static void wait_ms(void *arg, uint32_t delay)
++{
++    host_t *host = arg;
++    host->now += delay;
++    if (host->cancel_at && host->now >= host->cancel_at) host->valid = false;
++    if (host->pending && host->now >= host->complete_at) {
++        host->interval = host->target;
++        host->pending = false;
++        ++host->updates;
++    }
++}
++static int request(void *arg, bool idle)
++{
++    host_t *host = arg;
++    if (host->pending) return 2; // NimBLE BLE_HS_EALREADY.
++    host->target = idle ? VOKIE_IDLE_INTERVAL_MAX : VOKIE_AUDIO_INTERVAL;
++    // Reproduce the captured Mac behavior: a redundant idle request has no
++    // completion for 40 seconds, blocking all following audio requests.
++    host->complete_at = host->now + (idle && matches(host, true) ? 40000 : 220);
++    host->pending = true;
++    return 0;
++}
++static ble_audio_link_ops_t ops(host_t *host)
++{
++    return (ble_audio_link_ops_t){host, valid, matches, request, updates, now_ms, wait_ms};
++}
++
++static void capture_resumes_after_editing_on_an_idle_link(void)
++{
++    host_t host = {.now = 22421, .interval = VOKIE_AUDIO_INTERVAL, .valid = true};
++    ble_audio_link_t state = {0};
++    const ble_audio_link_ops_t callbacks = ops(&host);
++    assert(ble_audio_link_idle(&state, &callbacks) == 0);
++    wait_ms(&host, 220);
++    assert(matches(&host, true));
++
++    // Edits wake the audio worker but leave the negotiated idle interval.
++    // Its next idle deadline repeats the policy call on that same link.
++    host.now = 151656;
++    assert(ble_audio_link_idle(&state, &callbacks) == 0);
++    host.now = 176594;
++    const bool ready = ble_audio_link_prepare(&state, &callbacks);
++    printf("capture after idle edits: ready=%d elapsed=%u ms\n", ready, host.now - 176594);
++    fflush(stdout);
++    assert(ready); // UP must start capture, rather than show Slow BLE.
++    assert(matches(&host, false));
++    assert(host.now - 176594 < BLE_AUDIO_LINK_TIMEOUT_MS);
++
++    // A successful capture must still permit the next low-power idle link.
++    assert(ble_audio_link_idle(&state, &callbacks) == 0);
++    wait_ms(&host, 220);
++    assert(matches(&host, true));
++}
++
++static void capture_waits_for_an_accepted_idle_update(void)
++{
++    host_t host = {.interval = VOKIE_AUDIO_INTERVAL, .valid = true};
++    ble_audio_link_t state = {0};
++    const ble_audio_link_ops_t callbacks = ops(&host);
++    assert(ble_audio_link_idle(&state, &callbacks) == 0);
++    // The descriptor is still fast while the idle procedure is pending.
++    // A retry rejected by NimBLE must not erase that outstanding update.
++    assert(ble_audio_link_idle(&state, &callbacks) == 2);
++    assert(ble_audio_link_prepare(&state, &callbacks));
++    assert(matches(&host, false));
++    assert(host.now >= 440 && host.now < BLE_AUDIO_LINK_TIMEOUT_MS);
++}
++
++static void satisfied_idle_does_not_invent_a_pending_update(void)
++{
++    host_t host = {.interval = VOKIE_IDLE_INTERVAL_MAX, .valid = true};
++    ble_audio_link_t state = {0};
++    const ble_audio_link_ops_t callbacks = ops(&host);
++    assert(ble_audio_link_idle(&state, &callbacks) == 0);
++    // The central restores the fast interval before UP. No idle request was
++    // sent, so no callback is owed before that fast descriptor can be used.
++    host.interval = VOKIE_AUDIO_INTERVAL;
++    assert(ble_audio_link_prepare(&state, &callbacks));
++    assert(host.now == 0);
++}
++
++static void genuinely_blocked_audio_link_keeps_the_deadline(void)
++{
++    host_t host = {.interval = VOKIE_IDLE_INTERVAL_MAX, .valid = true,
++                   .pending = true, .complete_at = 40000};
++    ble_audio_link_t state = {.slowed = true};
++    const ble_audio_link_ops_t callbacks = ops(&host);
++    assert(!ble_audio_link_prepare(&state, &callbacks));
++    assert(host.now == BLE_AUDIO_LINK_TIMEOUT_MS);
++}
++
++static void stopped_or_replaced_capture_cancels_the_wait(void)
++{
++    host_t host = {.interval = VOKIE_IDLE_INTERVAL_MAX, .valid = true, .cancel_at = 60};
++    ble_audio_link_t state = {.slowed = true};
++    const ble_audio_link_ops_t callbacks = ops(&host);
++    assert(!ble_audio_link_prepare(&state, &callbacks));
++    assert(host.now == 60);
++}
++
++int main(void)
++{
++    capture_resumes_after_editing_on_an_idle_link();
++    capture_waits_for_an_accepted_idle_update();
++    satisfied_idle_does_not_invent_a_pending_update();
++    genuinely_blocked_audio_link_keeps_the_deadline();
++    stopped_or_replaced_capture_cancels_the_wait();
++    puts("BLE audio link lifecycle tests: PASS");
++    return 0;
++}
+diff --git a/tools/validate.sh b/tools/validate.sh
+index c399de6..541e525 100755
+--- a/tools/validate.sh
++++ b/tools/validate.sh
+@@ -81,6 +81,10 @@ run_static_checks() {
+         tests/test_diag_journal.c main/diag_journal.c \
+         -o "${test_dir}/test_diag_journal"
+     "${test_dir}/test_diag_journal"
++    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
++        tests/test_ble_audio_link.c main/ble_audio_link.c \
++        -o "${test_dir}/test_ble_audio_link"
++    "${test_dir}/test_ble_audio_link"
+     python3 tests/test_device_diagnostics.py
+     python3 tests/test_verify_firmware.py
+     rm -rf "${test_dir}"
