@@ -49,6 +49,7 @@ final class BridgeRuntime {
                 if !manual { try PassportMacInput.send(key) }
             },
             observeVoiceTarget: PassportMacInput.observeVoiceTarget,
+            observeUndoCommand: { [manual] in manual ? nil : PassportMacInput.observeUndoCommand() },
             send: { [weak self] command in self?.send(command) },
             log: log,
             statusChanged: onStatus,

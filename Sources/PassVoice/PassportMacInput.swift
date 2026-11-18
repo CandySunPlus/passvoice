@@ -7,6 +7,24 @@ enum PassportMacInput {
         MacVoiceTarget.observe()
     }
 
+    static func observeUndoCommand() -> (() throws -> Void)? {
+        guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return nil }
+        let app = AXUIElementCreateApplication(pid)
+        _ = AXUIElementSetMessagingTimeout(app, 0.15)
+        func focusedElement() -> AXUIElement? {
+            var value: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &value) == .success,
+                  let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+            return (value as! AXUIElement) // Checked the CF type above.
+        }
+        guard let original = focusedElement() else { return nil }
+        return {
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
+                  let current = focusedElement(), CFEqual(original, current) else { return }
+            try send(.undo, to: pid)
+        }
+    }
+
     private static func send(_ key: PassportKeystroke, to processID: pid_t?, tag: Int64,
                              unicodeText: String?) throws {
         try VoiceHotkey.checkAccess()

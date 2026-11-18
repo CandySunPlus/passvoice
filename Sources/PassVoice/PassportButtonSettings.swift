@@ -8,7 +8,7 @@ final class PassportButtonSettings: NSWindowController, NSWindowDelegate {
     ]
     private static let actions: [(action: PassportAction, title: String, symbol: String)] = [
         (.returnKey, "回车", "return"), (.backspace, "退格", "delete.left"),
-        (.deleteVoiceInput, "删除上一段语音输入", "text.badge.minus"), (.none, "不执行", "minus.circle"),
+        (.undo, "撤销（⌘Z）", "arrow.uturn.backward"), (.none, "不执行", "minus.circle"),
     ]
 
     private let bindings: PassportButtonBindings

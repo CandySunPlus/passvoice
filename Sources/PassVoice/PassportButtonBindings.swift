@@ -11,7 +11,7 @@ struct PassportButtonBindings {
     func action(for gesture: PassportGesture) -> PassportAction {
         if let data = overrides[gesture.rawValue] as? Data,
            let action = try? PropertyListDecoder().decode(PassportAction.self, from: data) {
-            return action
+            return action == .deleteVoiceInput ? .undo : action
         }
         return PassportAction.defaultAction(for: gesture)
     }

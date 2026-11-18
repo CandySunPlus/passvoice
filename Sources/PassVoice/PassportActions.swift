@@ -17,7 +17,9 @@ enum PassportGesture: String {
 }
 
 enum PassportAction: Equatable, Codable {
-    case returnKey, backspace, deleteVoiceInput, none
+    case returnKey, backspace, undo, none
+    // Retained for existing saved bindings.
+    case deleteVoiceInput
     case shortcut(PassportKeystroke, keyName: String)
 
     static func defaultAction(for gesture: PassportGesture) -> Self {
@@ -25,7 +27,7 @@ enum PassportAction: Equatable, Codable {
         case .downClick: return .returnKey
         case .downLong: return .none
         case .okClick: return .backspace
-        case .okLong: return .deleteVoiceInput
+        case .okLong: return .undo
         }
     }
 }
@@ -50,6 +52,7 @@ struct PassportKeystroke: Equatable, Codable {
 
     static let returnKey = Self(keyCode: UInt16(kVK_Return))
     static let backspace = Self(keyCode: UInt16(kVK_Delete))
+    static let undo = Self(keyCode: UInt16(kVK_ANSI_Z), modifiers: .command)
 }
 
 enum PassportTextComposition: Equatable {
