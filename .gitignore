@@ -2,3 +2,4 @@
 .DS_Store
 
 dist/
+app/.local-signing-identity

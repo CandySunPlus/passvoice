@@ -136,6 +136,7 @@ protocol PassportVoiceTarget: AnyObject {
     // False after another input or input source change during observation.
     var canConfirmVoiceText: Bool { get }
     var isFocused: Bool { get }
+    var canDeleteAttributedVoiceText: Bool { get }
 
     // Nil after any loss of focus or if the input cannot be read.
     func snapshot() -> PassportTextState?
@@ -151,5 +152,9 @@ protocol PassportVoiceTarget: AnyObject {
         ifSnapshotIs expected: PassportTextState, onEdit: @escaping (PassportEditObservation) -> Void
     ) -> Bool
 
-    func delete(_ range: NSRange, ifSnapshotIs expected: PassportTextState) throws
+    func delete(_ range: NSRange, ifSnapshotIs expected: PassportTextState, onDeletion: @escaping () -> Void) throws
+}
+
+extension PassportVoiceTarget {
+    var canDeleteAttributedVoiceText: Bool { false }
 }

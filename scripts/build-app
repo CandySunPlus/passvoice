@@ -2,6 +2,18 @@
 set -eu
 
 cd "$(dirname "$0")/.."
+if [ "${PASSVOICE_SIGN_IDENTITY+x}" = x ]; then
+    signing_identity="$PASSVOICE_SIGN_IDENTITY"
+elif [ -f app/.local-signing-identity ]; then
+    signing_identity=$(cat app/.local-signing-identity)
+else
+    signing_identity=-
+fi
+if [ -z "$signing_identity" ]; then
+    printf '%s\n' 'PassVoice signing identity is empty.' >&2
+    exit 1
+fi
+
 swift build -c release
 bin_dir=$(swift build -c release --show-bin-path)
 mkdir -p dist
@@ -18,8 +30,8 @@ cp app/PassVoice.icns "$contents/Resources/PassVoice.icns"
 cp Sources/PassportHelper/LICENSE "$contents/Resources/FoloToy-LICENSE.txt"
 
 plutil -lint "$contents/Info.plist"
-codesign --force --sign - "$contents/Helpers/passport-helper"
-codesign --force --sign - "$bundle"
+codesign --force --sign "$signing_identity" "$contents/Helpers/passport-helper"
+codesign --force --sign "$signing_identity" "$bundle"
 codesign --verify --deep --strict "$bundle"
 
 destination="dist/PassVoice.app"

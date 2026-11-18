@@ -116,6 +116,36 @@ struct PassportBridgeTests {
         expectEqual(harness.input.text, "AB")
     }
 
+    func testOKLongDeletesAttributedVoiceTextInCodexAndKeepsTyping() {
+        let harness = Harness()
+        harness.input.canDeleteAttributedVoiceText = true
+        harness.startVoiceCapture()
+        harness.input.setText("A片段", caret: 3)
+        harness.finishVoiceCapture()
+        harness.downClick()
+        harness.bridge.tick(now: harness.now + .milliseconds(100))
+        harness.input.reportValue()
+        harness.input.updateValue("A语音🙂", caret: 5)
+        harness.input.type("A语音🙂C", caret: 6, keystrokes: 1)
+        harness.okLong()
+        expectEqual(harness.input.text, "AC")
+        expectEqual(harness.keys, [])
+        harness.okLong()
+        expectEqual(harness.input.text, "AC")
+    }
+
+    func testOKLongPreservesAnIdenticalCodexReplacementAfterManualInput() {
+        let harness = Harness()
+        harness.input.canDeleteAttributedVoiceText = true
+        harness.startVoiceCapture()
+        harness.input.setText("AB", caret: 2)
+        harness.finishVoiceCapture()
+        harness.bridge.tick(now: harness.now + .milliseconds(100))
+        harness.input.setText("AB", caret: 2)
+        harness.okLong()
+        expectEqual(harness.input.text, "AB")
+    }
+
     func testQueuedReturnWaitsForLiveVoiceCompositionToClear() {
         let harness = Harness()
         harness.startVoiceCapture()
@@ -519,6 +549,7 @@ struct PassportBridgeTests {
         var text = "A🙂Z"
         var selection = NSRange(location: 1, length: 2)
         var canConfirmVoiceText = true
+        var canDeleteAttributedVoiceText = false
         var composition: PassportTextComposition = .unknown
         var hasFocus = true
         var isFocused: Bool { hasFocus }
@@ -556,18 +587,23 @@ struct PassportBridgeTests {
             updateValue(text, caret: caret)
         }
 
-        private func updateValue(_ text: String, caret: Int) {
+        func updateValue(_ text: String, caret: Int) {
             self.text = text
             selection = NSRange(location: caret, length: 0)
+            reportValue()
+        }
+
+        func reportValue() {
             if let state = snapshot() { onEdit?(.value(state)) }
         }
 
         func noteInput() { onEdit?(.input) }
 
-        func delete(_ range: NSRange, ifSnapshotIs expected: PassportTextState) {
+        func delete(_ range: NSRange, ifSnapshotIs expected: PassportTextState, onDeletion: @escaping () -> Void) {
             guard snapshot() == expected, let indices = Range(range, in: text) else { return }
             text.removeSubrange(indices)
             selection = NSRange(location: range.location, length: 0)
+            onDeletion()
         }
 
         func send(_ key: PassportKeystroke, ifSnapshotIs expected: PassportTextState) {
@@ -809,6 +845,8 @@ tests.testQueuedReturnIsDroppedWhenAnotherInputCouldHaveInsertedTheText()
 tests.testQueuedReturnExpiresBeforeALateCommitAndNewPressWorks()
 tests.testOKLongDeletesLiveVoiceTextOnlyAfterCompositionIsConfirmedClear()
 tests.testLiveVoiceTextIsNotCommittedWhenCompositionCannotBeRead()
+tests.testOKLongDeletesAttributedVoiceTextInCodexAndKeepsTyping()
+tests.testOKLongPreservesAnIdenticalCodexReplacementAfterManualInput()
 tests.testQueuedReturnWaitsForLiveVoiceCompositionToClear()
 tests.testQueuedReturnAndDeletionWaitForCompositionObservedAfterStopToClear()
 tests.testOKLongDeletesCommittedVoiceTextAndKeepsLaterTyping()
@@ -840,4 +878,4 @@ tests.testSavedShortcutSendsItsKeyAndModifiersAfterReloadingBindings()
 tests.testRestoringDefaultsClearsAllSavedBindings()
 tests.testDownLongDoesNotSendOrQueueItsBindingDuringCapture()
 tests.testCustomReturnIsIgnoredWhileRecordingAndNeverDeferred()
-print("39 Passport bridge tests passed")
+print("41 Passport bridge tests passed")

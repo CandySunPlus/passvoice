@@ -84,6 +84,7 @@ final class PassportBridge {
         var origin: VoiceOrigin?
         var stopShortcutSent = false
         var returnQueued = false
+        var tracksAttributedVoice = false
     }
 
     private struct EarlyReturn {
@@ -99,17 +100,34 @@ final class PassportBridge {
         private(set) var snapshot: PassportTextState
         private(set) var range: NSRange
         private var pendingEdit: PendingEdit?
+        private var voiceBaseline: PassportTextState?
         var inputPending: Bool { pendingEdit != nil }
 
-        init(target: PassportVoiceTarget, snapshot: PassportTextState, range: NSRange) {
+        init(target: PassportVoiceTarget, snapshot: PassportTextState, range: NSRange, voiceBaseline: PassportTextState?) {
             self.target = target
             self.snapshot = snapshot
             self.range = range
+            self.voiceBaseline = voiceBaseline
+        }
+
+        func finishAttribution() { voiceBaseline = nil }
+
+        private func reviseAttributedVoice(_ updated: PassportTextState) -> Bool? {
+            guard let voiceBaseline, pendingEdit == nil, target.canConfirmVoiceText else { return nil }
+            if updated == snapshot { return true }
+            // While the stopped IME is finalizing and no other input has
+            // occurred, only the original insertion may change.
+            guard updated.composition != .composing,
+                  let revised = voiceBaseline.insertedRange(in: updated) else { return false }
+            snapshot = updated
+            range = revised
+            return true
         }
 
         func apply(_ observation: PassportEditObservation) -> Bool {
             switch observation {
             case let .value(updated):
+                if let kept = reviseAttributedVoice(updated) { return kept }
                 // A value notification with identical text can be a same-text replacement
                 // or a pair of edits coalesced by the input. Neither preserves attribution.
                 guard let pendingEdit, !updated.hasSameText(as: snapshot),
@@ -121,11 +139,13 @@ final class PassportBridge {
                 self.pendingEdit = nil
                 return true
             case let .selection(updated):
+                if let kept = reviseAttributedVoice(updated) { return kept }
                 guard let retained = snapshot.retainedRange(range, in: updated),
                       NSIntersectionRange(retained, updated.selectedRange).length == 0 else { return false }
                 if updated.hasSameText(as: snapshot) { snapshot = updated }
                 return true
             case .typing:
+                finishAttribution()
                 guard pendingEdit != .other else { return false }
                 pendingEdit = .typing
                 return true
@@ -135,6 +155,7 @@ final class PassportBridge {
                     : (caret >= range.location && caret < NSMaxRange(range)) { return false }
                 fallthrough
             case .input:
+                finishAttribution()
                 // Multiple edits without a value observation can hide a remove-and-retype.
                 guard pendingEdit == nil else { return false }
                 pendingEdit = .other
@@ -387,10 +408,11 @@ final class PassportBridge {
     }
 
     private func perform(_ action: PassportAction) {
-        if voiceCommitWait != nil {
+        if let wait = voiceCommitWait {
             // The audio can be ready while Doubao is still editing. Keep direct
             // keystrokes out of that window even when attribution was lost.
             if action == .returnKey { voiceCommitWait?.returnQueued = true }
+            if action == .deleteVoiceInput, wait.tracksAttributedVoice, capture == nil { deleteVoiceInput() }
             return
         }
         guard capture == nil else { return }
@@ -417,10 +439,13 @@ final class PassportBridge {
         guard let wait = voiceCommitWait else { return }
         guard now < wait.deadline else {
             voiceCommitWait = nil
-            unresolvedCommitTarget?.stopMonitoringInput()
+            if wait.tracksAttributedVoice { committedVoiceInput?.finishAttribution() }
+            if let target = unresolvedCommitTarget, committedVoiceInput?.target !== target {
+                target.stopMonitoringInput()
+            }
             return
         }
-        guard wait.stopShortcutSent, let origin = wait.origin else { return }
+        guard wait.stopShortcutSent, !wait.tracksAttributedVoice, let origin = wait.origin else { return }
         guard let updated = origin.snapshot() else {
             voiceCommitWait?.origin = nil
             return
@@ -430,31 +455,51 @@ final class PassportBridge {
             voiceCommitWait?.origin = nil
             return
         }
+        if updated.composition == .unknown, origin.target.canDeleteAttributedVoiceText {
+            // The stop shortcut and untouched baseline establish attribution,
+            // but an editor without marked ranges cannot confirm a commit for Return.
+            voiceCommitWait?.tracksAttributedVoice = trackVoiceInput(
+                in: origin.target, snapshot: updated, range: range, voiceBaseline: origin.baseline
+            )
+            return
+        }
         // AX values can contain live IME text. A live candidate needs an explicit
         // clear composition state after the stop shortcut, even if its text is unchanged.
         guard updated.composition != .composing,
               !origin.requiresCompositionConfirmation || updated.composition == .clear else { return }
         voiceCommitWait = nil
         unresolvedCommitTarget = nil
-        let committed = CommittedVoiceInput(target: origin.target, snapshot: updated, range: range)
-        if origin.target.monitorEdits(ifSnapshotIs: updated, onEdit: { [weak self, weak committed] observation in
-            guard let self, let committed, self.committedVoiceInput === committed else { return }
-            if !committed.apply(observation) { self.committedVoiceInput = nil }
-        }) {
-            committedVoiceInput = committed
-        }
+        trackVoiceInput(in: origin.target, snapshot: updated, range: range)
         if wait.returnQueued {
             do { try origin.target.send(.returnKey, ifSnapshotIs: updated) }
             catch { log("Unable to send Passport keystroke: \(error.localizedDescription)") }
         }
     }
 
+    @discardableResult
+    private func trackVoiceInput(in target: PassportVoiceTarget, snapshot: PassportTextState, range: NSRange,
+                                 voiceBaseline: PassportTextState? = nil) -> Bool {
+        let committed = CommittedVoiceInput(target: target, snapshot: snapshot, range: range, voiceBaseline: voiceBaseline)
+        guard target.monitorEdits(ifSnapshotIs: snapshot, onEdit: { [weak self, weak committed] observation in
+            guard let self, let committed, self.committedVoiceInput === committed else { return }
+            if !committed.apply(observation) { self.committedVoiceInput = nil }
+        }) else { return false }
+        committedVoiceInput = committed
+        return true
+    }
+
     private func deleteVoiceInput() {
         guard let committed = committedVoiceInput else { return }
         committedVoiceInput = nil
         guard !committed.inputPending else { return }
-        do { try committed.target.delete(committed.range, ifSnapshotIs: committed.snapshot) }
-        catch { log("Unable to delete Passport voice input: \(error.localizedDescription)") }
+        let target = committed.target
+        do {
+            try target.delete(committed.range, ifSnapshotIs: committed.snapshot) { [weak self, weak target] in
+                guard let self, let target, self.unresolvedCommitTarget === target else { return }
+                self.unresolvedCommitTarget = nil
+                if self.voiceCommitWait?.tracksAttributedVoice == true { self.voiceCommitWait = nil }
+            }
+        } catch { log("Unable to delete Passport voice input: \(error.localizedDescription)") }
     }
 
     private func start(id: UInt32, canAttribute: Bool, now: DispatchTime) {

@@ -7,7 +7,7 @@ enum PassportMacInput {
         MacVoiceTarget.observe()
     }
 
-    static func send(_ key: PassportKeystroke, to processID: pid_t? = nil) throws {
+    static func send(_ key: PassportKeystroke, to processID: pid_t? = nil, tag: Int64 = 0) throws {
         try VoiceHotkey.checkAccess()
         guard let down = CGEvent(keyboardEventSource: nil, virtualKey: key.keyCode, keyDown: true),
               let up = CGEvent(keyboardEventSource: nil, virtualKey: key.keyCode, keyDown: false) else {
@@ -16,6 +16,10 @@ enum PassportMacInput {
         let flags = CGEventFlags(rawValue: key.modifiers.rawValue)
         down.flags = flags
         up.flags = flags
+        if tag != 0 {
+            down.setIntegerValueField(.eventSourceUserData, value: tag)
+            up.setIntegerValueField(.eventSourceUserData, value: tag)
+        }
         if let processID {
             down.postToPid(processID)
             up.postToPid(processID)
@@ -53,8 +57,10 @@ private final class MacVoiceTarget: PassportVoiceTarget {
 
     private let element: AXUIElement
     private let processID: pid_t
+    let canDeleteAttributedVoiceText: Bool
     private var lostFocus = false
     private var otherInput = false
+    private var inputRevision: UInt64 = 0
     private var focusObserver: AXObserver?
     private var inputTap: CFMachPort?
     private var inputRunLoopSource: CFRunLoopSource?
@@ -62,9 +68,10 @@ private final class MacVoiceTarget: PassportVoiceTarget {
     private var inputSourceObserver: NSObjectProtocol?
     private var onEdit: ((PassportEditObservation) -> Void)?
 
-    private init(element: AXUIElement, processID: pid_t) {
+    private init(element: AXUIElement, processID: pid_t, canDeleteAttributedVoiceText: Bool) {
         self.element = element
         self.processID = processID
+        self.canDeleteAttributedVoiceText = canDeleteAttributedVoiceText
     }
 
     static func observe() -> MacVoiceTarget? {
@@ -77,7 +84,10 @@ private final class MacVoiceTarget: PassportVoiceTarget {
         let subrole = attribute(kAXSubroleAttribute, of: element) as? String
         guard role == kAXTextFieldRole || role == kAXTextAreaRole || role == kAXComboBoxRole,
               subrole != kAXSecureTextFieldSubrole else { return nil }
-        let target = MacVoiceTarget(element: element, processID: pid)
+        let isCodexEditor = role == kAXTextAreaRole
+            && NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == "com.openai.codex"
+            && attribute("AXSelectedTextMarkerRange", of: element) != nil
+        let target = MacVoiceTarget(element: element, processID: pid, canDeleteAttributedVoiceText: isCodexEditor)
         guard target.observeFocus() && target.observeInput() else { return nil }
         return target
     }
@@ -115,18 +125,27 @@ private final class MacVoiceTarget: PassportVoiceTarget {
         try PassportMacInput.send(key, to: processID)
     }
 
-    func delete(_ range: NSRange, ifSnapshotIs expected: PassportTextState) throws {
+    func delete(_ range: NSRange, ifSnapshotIs expected: PassportTextState, onDeletion: @escaping () -> Void) throws {
         let selectionAttribute = kAXSelectedTextRangeAttribute as CFString
         let textAttribute = kAXSelectedTextAttribute as CFString
         guard range.length > 0, let indices = expected.indices(of: range),
               let originalSelection = Self.rangeValue(expected.selectedRange),
               let voiceSelection = Self.rangeValue(range),
-              onEdit != nil, canListenToInput, stillFocused(),
-              isSettable(selectionAttribute), isSettable(textAttribute),
+              onEdit != nil, canListenToInput, stillFocused(), isSettable(selectionAttribute),
               hasOnlySelection(expected.selectedRange), snapshot() == expected,
               !IsSecureEventInputEnabled() else { return }
 
         let selected = PassportTextState(text: expected.text, selectedRange: range, composition: expected.composition)
+        let remaining = expected.text.replacingCharacters(in: indices, with: "")
+        if canDeleteAttributedVoiceText {
+            guard expected.composition != .composing else { return }
+            let revision = inputRevision
+            guard AXUIElementSetAttributeValue(element, selectionAttribute, voiceSelection) == .success else { return }
+            deleteCodexSelection(expected: expected, selected: selected, remaining: remaining,
+                                 revision: revision, attempts: 9, onDeletion: onDeletion)
+            return
+        }
+        guard isSettable(textAttribute) else { return }
         let changesSelection = range != expected.selectedRange
         defer {
             // Restore the selection if the text did not change and we still own this selection.
@@ -141,10 +160,49 @@ private final class MacVoiceTarget: PassportVoiceTarget {
               selectedText.utf16.elementsEqual(expected.text[indices].utf16),
               hasOnlySelection(range), snapshot() == selected, !IsSecureEventInputEnabled() else { return }
 
-        let remaining = expected.text.replacingCharacters(in: indices, with: "")
         guard AXUIElementSetAttributeValue(element, textAttribute, "" as CFString) == .success,
               let updated = snapshot(), updated.text.utf16.elementsEqual(remaining.utf16) else {
             throw BridgeError("The input could not confirm deletion of the selected text")
+        }
+        onDeletion()
+    }
+
+    private func deleteCodexSelection(expected: PassportTextState, selected: PassportTextState,
+                                      remaining: String, revision: UInt64, attempts: Int,
+                                      onDeletion: @escaping () -> Void) {
+        guard inputRevision == revision, canListenToInput, let current = snapshot(),
+              current == expected || current == selected else { return }
+        // Chromium delivers the AX selection to its renderer asynchronously.
+        // Send Backspace only after that renderer reports the exact voice span.
+        if current == selected, hasOnlySelection(selected.selectedRange),
+           let range = selected.indices(of: selected.selectedRange),
+           let text = Self.attribute(kAXSelectedTextAttribute, of: element) as? String,
+           text.utf16.elementsEqual(selected.text[range].utf16),
+           inputRevision == revision, canListenToInput, snapshot() == selected,
+           (try? PassportMacInput.send(.backspace, to: processID, tag: VoiceHotkey.eventTag)) != nil {
+            confirmCodexDeletion(before: selected, remaining: remaining, revision: revision,
+                                 attempts: 9, onDeletion: onDeletion)
+        } else if attempts > 0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(20)) {
+                self.deleteCodexSelection(expected: expected, selected: selected, remaining: remaining,
+                                          revision: revision, attempts: attempts - 1, onDeletion: onDeletion)
+            }
+        } else if inputRevision == revision, canListenToInput, snapshot() == selected,
+                  let original = Self.rangeValue(expected.selectedRange) {
+            _ = AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, original)
+        }
+    }
+
+    private func confirmCodexDeletion(before: PassportTextState, remaining: String, revision: UInt64,
+                                      attempts: Int, onDeletion: @escaping () -> Void) {
+        guard inputRevision == revision, let current = snapshot() else { return }
+        if current.text.utf16.elementsEqual(remaining.utf16) {
+            onDeletion()
+        } else if current.hasSameText(as: before), attempts > 0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(20)) {
+                self.confirmCodexDeletion(before: before, remaining: remaining, revision: revision,
+                                          attempts: attempts - 1, onDeletion: onDeletion)
+            }
         }
     }
 
@@ -216,6 +274,14 @@ private final class MacVoiceTarget: PassportVoiceTarget {
         var value: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(element, kAXSelectedTextRangesAttribute as CFString, &value)
         if result == .attributeUnsupported { return true }
+        if canDeleteAttributedVoiceText, result == .failure || result == .noValue,
+           let single = Self.attribute(kAXSelectedTextRangeAttribute, of: element), Self.textRange(from: single) == selection,
+           let marker = Self.attribute("AXSelectedTextMarkerRange", of: element) {
+            var length: CFTypeRef?
+            return AXUIElementCopyParameterizedAttributeValue(element, "AXLengthForTextMarkerRange" as CFString,
+                                                              marker, &length) == .success
+                && (length as? NSNumber)?.intValue == selection.length
+        }
         guard result == .success, let ranges = value as? [AnyObject], ranges.count == 1 else { return false }
         return Self.textRange(from: ranges[0]) == selection
     }
@@ -274,6 +340,7 @@ private final class MacVoiceTarget: PassportVoiceTarget {
         inputSourceObserver = DistributedNotificationCenter.default().addObserver(
             forName: Self.inputSourceDidChange, object: nil, queue: .main
         ) { [weak self] _ in
+            self?.inputRevision &+= 1
             self?.otherInput = true
             self?.onEdit?(.uncertain)
         }
@@ -281,6 +348,7 @@ private final class MacVoiceTarget: PassportVoiceTarget {
     }
 
     private func inputChanged(_ type: CGEventType, event: CGEvent) {
+        inputRevision &+= 1
         otherInput = true
         guard let onEdit else { return }
         switch type {
@@ -331,8 +399,14 @@ private final class MacVoiceTarget: PassportVoiceTarget {
     }
 
     private static func focusedElement() -> AXUIElement? {
-        guard let element = attribute(kAXFocusedUIElementAttribute, of: systemAccessibility),
-              CFGetTypeID(element) == AXUIElementGetTypeID() else { return nil }
+        if let element = attribute(kAXFocusedUIElementAttribute, of: systemAccessibility),
+           CFGetTypeID(element) == AXUIElementGetTypeID() {
+            return (element as! AXUIElement) // Checked the CF type above.
+        }
+        guard let frontmost = NSWorkspace.shared.frontmostApplication, frontmost.bundleIdentifier == "com.openai.codex",
+              let element = attribute(kAXFocusedUIElementAttribute, of: AXUIElementCreateApplication(frontmost.processIdentifier)),
+              CFGetTypeID(element) == AXUIElementGetTypeID(),
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == frontmost.processIdentifier else { return nil }
         return (element as! AXUIElement) // Checked the CF type above.
     }
 
