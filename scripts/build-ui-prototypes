@@ -1,0 +1,88 @@
+#!/bin/sh
+set -eu
+
+cd "$(dirname "$0")/.."
+firmware_base=${PASSVOICE_FIRMWARE_BASE:-"$(pwd)/../passvoice-firmware-base"}
+lvgl="$firmware_base/managed_components/lvgl__lvgl"
+if [ ! -f "$lvgl/lvgl.h" ]; then
+    printf '%s\n' "Set PASSVOICE_FIRMWARE_BASE to the firmware checkout with its managed components installed." >&2
+    exit 1
+fi
+
+output="$(pwd)/dist/ui-prototypes"
+mkdir -p "$output"
+stage=$(mktemp -d "$output/.bundle.XXXXXX")
+trap 'rm -rf "$stage"' EXIT
+
+app="PassVoice UI Prototype.app"
+contents="$stage/$app/Contents"
+pixels="$contents/Resources/Passport-pixels"
+mkdir -p "$contents/MacOS" "$pixels"
+
+host_build="$(pwd)/dist/.prototype-passport-lvgl"
+cmake -S prototype/passport -B "$host_build" -DLVGL_DIR="$lvgl" -DCMAKE_BUILD_TYPE=Release
+cmake --build "$host_build" --parallel 8
+"$host_build/capture" "$stage"
+
+# Expand the actual 5/6/5 channels to PNG without resizing or filtering.
+python3 - "$stage" "$pixels" <<'PY'
+import struct
+import sys
+import zlib
+from pathlib import Path
+
+source, output = map(Path, sys.argv[1:])
+
+def chunk(tag, body):
+    return struct.pack(">I", len(body)) + tag + body + struct.pack(">I", zlib.crc32(tag + body))
+
+for framebuffer in sorted(source.glob("*.rgb565")):
+    raw = framebuffer.read_bytes()
+    width, height = 240, 320
+    assert len(raw) == width * height * 2, framebuffer
+    rows = bytearray()
+    for y in range(height):
+        rows.append(0)
+        for (pixel,) in struct.iter_unpack("<H", raw[y * width * 2:(y + 1) * width * 2]):
+            rows.extend(((pixel >> 11) * 255 // 31, ((pixel >> 5) & 63) * 255 // 63, (pixel & 31) * 255 // 31))
+    png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+    png += chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
+    (output / framebuffer.with_suffix(".png").name).write_bytes(png)
+PY
+
+xcrun swiftc -target "$(uname -m)-apple-macosx13.0" prototype/app/main.swift \
+    Sources/PassVoice/PassportActions.swift -o "$contents/MacOS/PassVoiceUIPrototype"
+cp prototype/app/Info.plist "$contents/Info.plist"
+cp app/PassVoice.icns "$contents/Resources/PassVoice.icns"
+plutil -lint "$contents/Info.plist"
+codesign --force --sign - "$stage/$app"
+codesign --verify --strict "$stage/$app"
+
+if [ -e "$output/$app" ]; then
+    mv "$output/$app" "$stage/previous.app"
+fi
+if ! mv "$stage/$app" "$output/$app"; then
+    if [ -e "$stage/previous.app" ]; then
+        mv "$stage/previous.app" "$output/$app"
+    fi
+    exit 1
+fi
+printf '%s\n' "$output/$app"
+
+if [ "${1:-}" = "--firmware" ]; then
+    firmware="$stage/firmware"
+    mkdir -p "$firmware"
+    git -C "$firmware_base" archive fe8f68826d7ccfe9a248c59681dc9e1ea7031e90 | tar -x -C "$firmware"
+    cp -R "$firmware_base/managed_components" "$firmware/"
+    cp prototype/passport/passvoice_screen.c prototype/passport/passvoice_screen.h \
+        prototype/passport/preview_main.c "$firmware/main/"
+    cat > "$firmware/main/CMakeLists.txt" <<'CMAKE'
+idf_component_register(SRCS "preview_main.c" "passvoice_screen.c"
+    INCLUDE_DIRS "." REQUIRES bsp)
+CMAKE
+    printf '\nCONFIG_LV_FONT_MONTSERRAT_30=y\n' >> "$firmware/sdkconfig.defaults"
+    docker run --rm --mount "type=bind,source=$firmware,target=/preview" -w /preview espressif/idf:v5.5.3 \
+        bash -ec 'idf.py merge-bin -o FoloToy-AI-Passport-full.bin && python3 tools/verify_firmware.py build'
+    install -m 644 "$firmware/build/FoloToy-AI-Passport-full.bin" "$output/PassVoice-UI-Preview-full.bin"
+    printf '%s\n' "$output/PassVoice-UI-Preview-full.bin"
+fi
