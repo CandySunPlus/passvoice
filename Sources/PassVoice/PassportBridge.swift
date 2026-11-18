@@ -53,16 +53,28 @@ final class PassportBridge {
         case waiting, awaitingAcknowledgment, ready
     }
 
-    private struct VoiceOrigin {
+    private final class VoiceOrigin {
         let target: PassportVoiceTarget
         let baseline: PassportTextState
+        private(set) var observedLiveText = false
+
+        init(target: PassportVoiceTarget, baseline: PassportTextState) {
+            self.target = target
+            self.baseline = baseline
+        }
 
         func snapshot() -> PassportTextState? {
             guard target.canConfirmVoiceText else { return nil }
             return target.snapshot()
         }
 
-        var isUnchanged: Bool { snapshot() == baseline }
+        var canContinue: Bool {
+            guard let current = snapshot() else { return false }
+            if current.hasSameText(as: baseline), current.selectedRange == baseline.selectedRange { return true }
+            guard baseline.insertedRange(in: current) != nil else { return false }
+            observedLiveText = true
+            return true
+        }
     }
 
     private struct VoiceCommitWait {
@@ -320,11 +332,11 @@ final class PassportBridge {
             capture.tail = (finalFrame, now + .milliseconds(500))
             let origin = capture.voiceOrigin
             let queuedReturn = earlyReturn.map {
-                $0.id == capture.id && now < $0.deadline && $0.origin?.isUnchanged == true
+                $0.id == capture.id && now < $0.deadline && $0.origin?.canContinue == true
             } ?? false
             earlyReturn = nil
             voiceCommitWait = VoiceCommitWait(
-                deadline: now + .seconds(5), origin: origin?.isUnchanged == true ? origin : nil,
+                deadline: now + .seconds(5), origin: origin?.canContinue == true ? origin : nil,
                 returnQueued: queuedReturn
             )
             statusChanged(.finishing)
@@ -416,6 +428,10 @@ final class PassportBridge {
             voiceCommitWait?.origin = nil
             return
         }
+        // AX values can contain live IME text. A live candidate needs an explicit
+        // clear composition state after the stop shortcut, even if its text is unchanged.
+        guard updated.composition != .composing,
+              !origin.observedLiveText || updated.composition == .clear else { return }
         voiceCommitWait = nil
         unresolvedCommitTarget = nil
         let committed = CommittedVoiceInput(target: origin.target, snapshot: updated, range: range)
@@ -449,7 +465,7 @@ final class PassportBridge {
                 self.abort("BlackHole stopped during playback")
             }
             if let pending = earlyReturn,
-               now >= pending.deadline || pending.origin?.isUnchanged != true { earlyReturn = nil }
+               now >= pending.deadline || pending.origin?.canContinue != true { earlyReturn = nil }
             let origin = canAttribute ? (earlyReturn?.origin ?? observeVoiceOrigin()) : nil
             do {
                 try tapVoiceKey?()
@@ -474,7 +490,7 @@ final class PassportBridge {
 
     private func observeVoiceOrigin() -> VoiceOrigin? {
         guard tapVoiceKey != nil, let target = observeVoiceTarget(), target.canConfirmVoiceText,
-              let baseline = target.snapshot() else { return nil }
+              let baseline = target.snapshot(), baseline.composition != .composing else { return nil }
         return VoiceOrigin(target: target, baseline: baseline)
     }
 
@@ -529,7 +545,7 @@ final class PassportBridge {
         guard let capture else { return }
         self.capture = nil
         capture.playback.stop()
-        let canConfirmCommit = endingNormally && voiceCommitWait?.origin?.isUnchanged == true
+        let canConfirmCommit = endingNormally && voiceCommitWait?.origin?.canContinue == true
         if !canConfirmCommit { voiceCommitWait?.origin = nil }
         do {
             if let tapVoiceKey {

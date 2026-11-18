@@ -52,12 +52,17 @@ struct PassportKeystroke: Equatable, Codable {
     static let backspace = Self(keyCode: UInt16(kVK_Delete))
 }
 
+enum PassportTextComposition: Equatable {
+    case unknown, clear, composing
+}
+
 struct PassportTextState: Equatable {
     let text: String
     let selectedRange: NSRange
+    var composition: PassportTextComposition = .unknown
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.selectedRange == rhs.selectedRange && lhs.hasSameText(as: rhs)
+        lhs.selectedRange == rhs.selectedRange && lhs.hasSameText(as: rhs) && lhs.composition == rhs.composition
     }
 
     func hasSameText(as other: Self) -> Bool { text.utf16.elementsEqual(other.text.utf16) }

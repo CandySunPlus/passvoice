@@ -104,8 +104,10 @@ private final class MacVoiceTarget: PassportVoiceTarget {
         guard AXUIElementCopyMultipleAttributeValues(element, names, .stopOnError, &attributes) == .success,
               let values = attributes as? [AnyObject], values.count == 2,
               let text = values[0] as? String,
-              let selection = Self.textRange(from: values[1]), stillFocused() else { return nil }
-        return PassportTextState(text: text, selectedRange: selection)
+              let selection = Self.textRange(from: values[1]) else { return nil }
+        let composition = compositionState()
+        guard stillFocused() else { return nil }
+        return PassportTextState(text: text, selectedRange: selection, composition: composition)
     }
 
     func send(_ key: PassportKeystroke, ifSnapshotIs expected: PassportTextState) throws {
@@ -124,7 +126,7 @@ private final class MacVoiceTarget: PassportVoiceTarget {
               hasOnlySelection(expected.selectedRange), snapshot() == expected,
               !IsSecureEventInputEnabled() else { return }
 
-        let selected = PassportTextState(text: expected.text, selectedRange: range)
+        let selected = PassportTextState(text: expected.text, selectedRange: range, composition: expected.composition)
         let changesSelection = range != expected.selectedRange
         defer {
             // Restore the selection if the text did not change and we still own this selection.
@@ -190,6 +192,19 @@ private final class MacVoiceTarget: PassportVoiceTarget {
         default:
             loseFocus()
         }
+    }
+
+    private func compositionState() -> PassportTextComposition {
+        // Public AppKit NSAccessibilityTextInputMarkedRangeAttribute (macOS 10.6+).
+        // Unsupported attributes and read failures do not prove that composition ended.
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, "AXTextInputMarkedRange" as CFString, &value) == .success,
+              let value, CFGetTypeID(value) == AXValueGetTypeID() else { return .unknown }
+        var range = CFRange()
+        let axValue = value as! AXValue // Checked the CF type above.
+        guard AXValueGetValue(axValue, .cfRange, &range), range.length >= 0,
+              range.location >= 0 || (range.location == kCFNotFound && range.length == 0) else { return .unknown }
+        return range.length == 0 ? .clear : .composing
     }
 
     private func isSettable(_ attribute: CFString) -> Bool {

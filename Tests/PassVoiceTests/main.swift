@@ -81,6 +81,58 @@ struct PassportBridgeTests {
         expectEqual(harness.keys, [.returnKey])
     }
 
+    func testOKLongDeletesLiveVoiceTextOnlyAfterCompositionIsConfirmedClear() {
+        let harness = Harness()
+        harness.startVoiceCapture()
+        harness.input.text = "A说🙂"
+        harness.input.selection = NSRange(location: 4, length: 0)
+        harness.input.composition = .composing
+        harness.finishVoiceCapture()
+        harness.bridge.tick(now: harness.now + .milliseconds(100))
+        harness.okLong()
+        expectEqual(harness.input.text, "A说🙂")
+
+        harness.input.composition = .clear
+        harness.bridge.tick(now: harness.now + .milliseconds(200))
+        harness.input.type("A说🙂C", caret: 5, keystrokes: 1)
+        harness.okLong()
+        expectEqual(harness.input.text, "AC")
+    }
+
+    func testLiveVoiceTextIsNotCommittedWhenCompositionCannotBeRead() {
+        let harness = Harness()
+        harness.startVoiceCapture()
+        harness.input.text = "AB"
+        harness.input.selection = NSRange(location: 2, length: 0)
+        harness.finishVoiceCapture()
+        harness.downClick()
+        harness.bridge.tick(now: harness.now + .milliseconds(100))
+        harness.okLong()
+        expectEqual(harness.keys, [])
+        expectEqual(harness.input.text, "AB")
+        harness.bridge.tick(now: harness.now + .seconds(5))
+        harness.okLong()
+        expectEqual(harness.keys, [])
+        expectEqual(harness.input.text, "AB")
+    }
+
+    func testQueuedReturnWaitsForLiveVoiceCompositionToClear() {
+        let harness = Harness()
+        harness.startVoiceCapture()
+        harness.input.text = "AB"
+        harness.input.selection = NSRange(location: 2, length: 0)
+        harness.input.composition = .composing
+        harness.finishVoiceCapture()
+        harness.downClick()
+        harness.bridge.tick(now: harness.now + .milliseconds(100))
+        expectEqual(harness.keys, [])
+        harness.input.composition = .clear
+        harness.bridge.tick(now: harness.now + .milliseconds(200))
+        expectEqual(harness.keys, [.returnKey])
+        harness.okLong()
+        expectEqual(harness.input.text, "A")
+    }
+
     func testOKLongDeletesCommittedVoiceTextAndKeepsLaterTyping() {
         let harness = Harness()
         harness.startVoiceCapture()
@@ -441,6 +493,7 @@ struct PassportBridgeTests {
         var text = "A🙂Z"
         var selection = NSRange(location: 1, length: 2)
         var canConfirmVoiceText = true
+        var composition: PassportTextComposition = .unknown
         var hasFocus = true
         var isFocused: Bool { hasFocus }
         let sendKey: (PassportKeystroke) -> Void
@@ -454,7 +507,7 @@ struct PassportBridgeTests {
         }
 
         func snapshot() -> PassportTextState? {
-            hasFocus ? PassportTextState(text: text, selectedRange: selection) : nil
+            hasFocus ? PassportTextState(text: text, selectedRange: selection, composition: composition) : nil
         }
 
         func stopMonitoringInput() {}
@@ -728,6 +781,9 @@ tests.testQueuedReturnIsDroppedIfInputChangesBeforeUpStopsRecording()
 tests.testQueuedReturnIsDroppedAfterLosingAndRegainingFocus()
 tests.testQueuedReturnIsDroppedWhenAnotherInputCouldHaveInsertedTheText()
 tests.testQueuedReturnExpiresBeforeALateCommitAndNewPressWorks()
+tests.testOKLongDeletesLiveVoiceTextOnlyAfterCompositionIsConfirmedClear()
+tests.testLiveVoiceTextIsNotCommittedWhenCompositionCannotBeRead()
+tests.testQueuedReturnWaitsForLiveVoiceCompositionToClear()
 tests.testOKLongDeletesCommittedVoiceTextAndKeepsLaterTyping()
 tests.testOKLongKeepsTypingInsertedBeforeTheCommittedRange()
 tests.testOKLongSkipsWhenRepeatedTextMakesTheRangeAmbiguous()
@@ -757,4 +813,4 @@ tests.testSavedShortcutSendsItsKeyAndModifiersAfterReloadingBindings()
 tests.testRestoringDefaultsClearsAllSavedBindings()
 tests.testDownLongDoesNotSendOrQueueItsBindingDuringCapture()
 tests.testCustomReturnIsIgnoredWhileRecordingAndNeverDeferred()
-print("35 Passport bridge tests passed")
+print("38 Passport bridge tests passed")
