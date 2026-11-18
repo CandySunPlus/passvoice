@@ -51,7 +51,6 @@ private final class PassVoiceMenuBar: NSObject, NSApplicationDelegate, NSMenuDel
     private let disconnectItem = NSMenuItem()
     private let retryItem = NSMenuItem()
     private let permissionItem = NSMenuItem()
-    private let inputMonitoringItem = NSMenuItem()
     private let audioItem = NSMenuItem()
     private let loginItem = NSMenuItem()
     private let loginSettingsItem = NSMenuItem()
@@ -98,7 +97,6 @@ private final class PassVoiceMenuBar: NSObject, NSApplicationDelegate, NSMenuDel
         menu.addItem(.separator())
         addAction(NSMenuItem(), title: "按键设置…", action: #selector(showButtonSettings))
         addAction(permissionItem, title: "授权辅助功能…", action: #selector(requestAccessibility))
-        addAction(inputMonitoringItem, title: "授权输入监控…", action: #selector(requestInputMonitoring))
         audioItem.title = "需要 BlackHole 2ch"
         audioItem.isEnabled = false
         menu.addItem(audioItem)
@@ -281,7 +279,6 @@ private final class PassVoiceMenuBar: NSObject, NSApplicationDelegate, NSMenuDel
 
     private func refreshPrerequisites() {
         permissionItem.isHidden = AXIsProcessTrusted() && CGPreflightPostEventAccess()
-        inputMonitoringItem.isHidden = !permissionItem.isHidden || CGPreflightListenEventAccess()
         audioItem.isHidden = (try? BlackHolePlayback.deviceID()) != nil
     }
 
@@ -290,14 +287,6 @@ private final class PassVoiceMenuBar: NSObject, NSApplicationDelegate, NSMenuDel
         if !AXIsProcessTrustedWithOptions(options) || !CGRequestPostEventAccess() {
             showAlert(title: "允许 PassVoice 模拟语音快捷键",
                       message: "在「系统设置 → 隐私与安全性 → 辅助功能」中启用 PassVoice，然后重新打开菜单。")
-        }
-        refreshPrerequisites()
-    }
-
-    @objc private func requestInputMonitoring() {
-        if !CGRequestListenEventAccess() {
-            showAlert(title: "允许 PassVoice 检查语音提交期间的按键",
-                      message: "在「系统设置 → 隐私与安全性 → 输入监控」中启用并重新打开 PassVoice。等待语音文字时，键盘或鼠标操作会取消暂存的回车。PassVoice 不记录按键。")
         }
         refreshPrerequisites()
     }

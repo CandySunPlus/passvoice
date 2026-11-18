@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Darwin
 
@@ -11,7 +12,7 @@ Usage:
   --manual      Send audio only. Start and end Doubao from its physical shortcut.
   --verbose     Log the sequence number of each received audio frame.
 
-Automatic mode uses the right Option shortcut for Doubao's hands-free voice input.
+Automatic mode shows a voice draft and uses Doubao's right Option shortcut.
 """
 
 private struct Options {
@@ -100,9 +101,15 @@ func runCommandLine() {
     }
 
     do {
-        let app = CommandLineApplication(options: try Options(arguments))
+        let options = try Options(arguments)
+        let automatic = !options.scan && !options.manual
+        if automatic { NSApplication.shared.setActivationPolicy(.accessory) }
+        let app = CommandLineApplication(options: options)
         try app.start()
-        withExtendedLifetime(app) { dispatchMain() }
+        withExtendedLifetime(app) {
+            if automatic { NSApplication.shared.run() }
+            else { dispatchMain() }
+        }
     } catch {
         logBridgeMessage(error.localizedDescription)
         logBridgeMessage(usage)
