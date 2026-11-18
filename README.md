@@ -44,12 +44,13 @@ git checkout --detach 0e3543259f578f5d5678a58edecca5c8bb81e927
 git am "$passvoice_repo/firmware/0001-passvoice-up-only.patch" \
   "$passvoice_repo/firmware/0002-passvoice-down-hold.patch" \
   "$passvoice_repo/firmware/0003-passvoice-deliver-gestures-from-worker.patch" \
-  "$passvoice_repo/firmware/0004-passvoice-resume-audio-link.patch"
+  "$passvoice_repo/firmware/0004-passvoice-resume-audio-link.patch" \
+  "$passvoice_repo/firmware/0005-passvoice-wait-for-audio-link.patch"
 . /path/to/esp-idf-v5.5.3/export.sh
 ./tools/validate.sh
 ```
 
-固件保留空闲 20 秒后的 90–120 ms 低功耗 BLE 间隔。编辑按键唤醒后，若连接已满足空闲间隔，就不再重复请求更新；下次 UP 会恢复 15 ms 音频间隔，避免冗余更新阻塞后出现 `Slow BLE`。
+固件保留空闲 20 秒后的 90–120 ms 低功耗 BLE 间隔。编辑按键唤醒后，若连接已满足空闲间隔，就不再重复请求更新；下次 UP 最多等待 3 秒恢复 15 ms 音频间隔，容纳 Mac 实测耗时 1531 ms 的连接更新，避免首次 UP 过早显示 `Slow BLE`。停止采集或断连会提前取消等待。
 
 验证通过后，可用 AI Passport 小程序安装生成的 `build/FoloToy-AI-Passport-full.bin`。 [固件安装与分区约定](https://github.com/CandySunPlus/vokie-ai-passport-firmware/blob/0e3543259f578f5d5678a58edecca5c8bb81e927/docs/development/engineering/ble-recovery-compatibility.zh_CN.md)
 
