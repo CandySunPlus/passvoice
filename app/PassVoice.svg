@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>PassVoice</title>
+  <desc>A mint voice waveform next to a text cursor on a deep blue tile.</desc>
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0.8" y2="1">
+      <stop stop-color="#234369"/>
+      <stop offset="0.54" stop-color="#132945"/>
+      <stop offset="1" stop-color="#0B152B"/>
+    </linearGradient>
+    <radialGradient id="light" cx="0.22" cy="0.17" r="0.78">
+      <stop stop-color="#439FAD" stop-opacity="0.26"/>
+      <stop offset="1" stop-color="#439FAD" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="edge" x2="0" y2="1">
+      <stop stop-color="#DAF8FF" stop-opacity="0.36"/>
+      <stop offset="0.6" stop-color="#93B9F2" stop-opacity="0.11"/>
+      <stop offset="1" stop-color="#93B9F2" stop-opacity="0.19"/>
+    </linearGradient>
+    <linearGradient id="wave" gradientUnits="userSpaceOnUse" x1="360" y1="342" x2="360" y2="682">
+      <stop stop-color="#DBFFF1"/>
+      <stop offset="1" stop-color="#59DFBF"/>
+    </linearGradient>
+    <linearGradient id="cursor" gradientUnits="userSpaceOnUse" x1="710" y1="348" x2="710" y2="676">
+      <stop stop-color="#F0FFFB"/>
+      <stop offset="1" stop-color="#9CEFDA"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feGaussianBlur stdDeviation="17"/>
+    </filter>
+    <path id="waveform" d="M248 470v84 M343 363v298 M438 411v202 M533 475v74"/>
+    <path id="text-cursor" d="M650 373h126 M713 373v278 M650 651h126"/>
+  </defs>
+
+  <rect x="103" y="112" width="818" height="824" rx="183" fill="#030918" opacity="0.49" filter="url(#shadow)"/>
+  <rect x="100" y="92" width="824" height="824" rx="185" fill="url(#tile)"/>
+  <rect x="100" y="92" width="824" height="824" rx="185" fill="url(#light)"/>
+  <rect x="102" y="94" width="820" height="820" rx="183" fill="none" stroke="url(#edge)" stroke-width="4"/>
+
+  <g fill="none" stroke-linecap="round" transform="translate(0 -8)">
+    <g stroke="#061626" opacity="0.34" transform="translate(0 10)">
+      <use href="#waveform" stroke-width="60"/>
+      <use href="#text-cursor" stroke-width="54"/>
+    </g>
+    <use href="#waveform" stroke="url(#wave)" stroke-width="60"/>
+    <use href="#text-cursor" stroke="url(#cursor)" stroke-width="54"/>
+  </g>
+</svg>

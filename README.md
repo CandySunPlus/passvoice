@@ -4,7 +4,7 @@ PassVoice 在 macOS 上接收 AI Passport 的 BLE 语音，把音频送入 Black
 
 ## 菜单栏 App
 
-双击 `dist/PassVoice.app` 启动 PassVoice。首次使用时，在菜单栏的波形图标下选择「选择 Passport」，然后选择设备。App 会记住所选设备，下次启动时自动连接。看到「已连接」后，聚焦输入框并单击 Passport 的 **UP** 开始说话，再单击一次结束。
+双击 `dist/PassVoice.app` 启动 PassVoice。首次使用时，点击菜单栏中带文字光标的声波图标，打开「选择 Passport」并选择设备。App 会记住所选设备，下次启动时自动连接。看到「已连接」后，聚焦输入框并单击 Passport 的 **UP** 开始说话，再单击一次结束。
 
 - 在豆包的「语音输入」设置中，把麦克风选为 **BlackHole 2ch**，把「免按模式」设为**右 Option**，并在输入框使用豆包输入法。
 - 在 Passport 与 Vokie 已连接时，先退出 Vokie。若 macOS 提示访问蓝牙，请允许 PassVoice。通过菜单里的「授权辅助功能」给 PassVoice 模拟语音快捷键的权限。

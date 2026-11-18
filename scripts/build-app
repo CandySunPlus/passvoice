@@ -14,6 +14,7 @@ mkdir -p "$contents/MacOS" "$contents/Helpers" "$contents/Resources"
 install -m 755 "$bin_dir/passvoice" "$contents/MacOS/PassVoice"
 install -m 755 "$bin_dir/passport-helper" "$contents/Helpers/passport-helper"
 cp app/Info.plist "$contents/Info.plist"
+cp app/PassVoice.icns "$contents/Resources/PassVoice.icns"
 cp Sources/PassportHelper/LICENSE "$contents/Resources/FoloToy-LICENSE.txt"
 
 plutil -lint "$contents/Info.plist"

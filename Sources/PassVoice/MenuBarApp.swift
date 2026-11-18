@@ -17,6 +17,28 @@ func runMenuBarApp() {
 @available(macOS 13, *)
 private final class PassVoiceMenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static let logger = Logger(subsystem: "com.candysunplus.passvoice", category: "Passport")
+    private static let passVoiceIcon = NSImage(size: NSSize(width: 18, height: 16), flipped: true) { _ in
+        let path = NSBezierPath()
+        path.lineWidth = 1.6
+        path.lineCapStyle = .round
+
+        let waveform: [(x: CGFloat, height: CGFloat)] = [(2, 3), (4.5, 10), (7, 7), (9.5, 3)]
+        for (x, height) in waveform {
+            path.move(to: NSPoint(x: x, y: 8 - height / 2))
+            path.line(to: NSPoint(x: x, y: 8 + height / 2))
+        }
+
+        path.move(to: NSPoint(x: 13, y: 3.5))
+        path.line(to: NSPoint(x: 16, y: 3.5))
+        path.move(to: NSPoint(x: 14.5, y: 3.5))
+        path.line(to: NSPoint(x: 14.5, y: 12.5))
+        path.move(to: NSPoint(x: 13, y: 12.5))
+        path.line(to: NSPoint(x: 16, y: 12.5))
+
+        NSColor.black.setStroke()
+        path.stroke()
+        return true
+    }
     private let preferenceKey = "preferredPassportID"
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private let menu = NSMenu()
@@ -157,18 +179,18 @@ private final class PassVoiceMenuBar: NSObject, NSApplicationDelegate, NSMenuDel
 
     private func refreshStatus() {
         let title: String
-        let symbol: String
+        let symbol: String?
         if restarting {
             title = "正在切换连接…"
-            symbol = "waveform"
+            symbol = nil
         } else {
             switch connection {
             case .handshaking:
                 title = "正在握手…"
-                symbol = "waveform"
+                symbol = nil
             case .ready:
                 title = "已连接"
-                symbol = "waveform"
+                symbol = nil
             case .recording:
                 title = "录音中"
                 symbol = "mic.fill"
@@ -180,14 +202,19 @@ private final class PassVoiceMenuBar: NSObject, NSApplicationDelegate, NSMenuDel
                 symbol = "exclamationmark.circle"
             case .disconnected, nil:
                 title = selected == nil ? "正在扫描…" : previousConnection ? "正在重连…" : "正在连接…"
-                symbol = "waveform"
+                symbol = nil
             }
         }
         let deviceName = selected.flatMap { discovered[$0] }
         connectionItem.title = deviceName.map { "\(title) · \($0)" } ?? title
         let description = "PassVoice · \(connectionItem.title)"
         if let button = statusItem.button {
-            let image = NSImage(systemSymbolName: symbol, accessibilityDescription: description)
+            let image: NSImage?
+            if let symbol {
+                image = NSImage(systemSymbolName: symbol, accessibilityDescription: description)
+            } else {
+                image = Self.passVoiceIcon
+            }
             image?.isTemplate = true
             button.image = image
             button.title = image == nil ? "PV" : ""

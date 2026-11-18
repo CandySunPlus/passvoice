@@ -8,6 +8,8 @@
     <string>PassVoice</string>
     <key>CFBundleExecutable</key>
     <string>PassVoice</string>
+    <key>CFBundleIconFile</key>
+    <string>PassVoice.icns</string>
     <key>CFBundleIdentifier</key>
     <string>com.candysunplus.passvoice</string>
     <key>CFBundleName</key>
