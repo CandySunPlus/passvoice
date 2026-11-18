@@ -146,6 +146,105 @@ struct PassportBridgeTests {
         expectEqual(harness.input.text, "AB")
     }
 
+    func testOKLongWaitsForCodexSelectionToSettleAfterStop() {
+        let harness = Harness()
+        harness.input.canDeleteAttributedVoiceText = true
+        harness.startVoiceCapture()
+        harness.input.setText("A语音🙂", caret: 5)
+        harness.input.selection = NSRange(location: 1, length: 4)
+        harness.finishVoiceCapture()
+        harness.bridge.tick(now: harness.now + .milliseconds(100))
+        harness.okLong()
+        expectEqual(harness.input.text, "A语音🙂")
+
+        harness.input.selection = NSRange(location: 5, length: 0)
+        harness.bridge.tick(now: harness.now + .milliseconds(200))
+        harness.input.type("A语音🙂C", caret: 6, keystrokes: 1)
+        harness.okLong()
+        expectEqual(harness.input.text, "AC")
+    }
+
+    func testOKLongIgnoresCodexValueEchoFromConfirmingManualTyping() {
+        let harness = Harness()
+        harness.input.canDeleteAttributedVoiceText = true
+        harness.startVoiceCapture()
+        harness.finishVoiceCapture()
+        harness.commitVoiceText("AB", caret: 2)
+        harness.input.type("ABC", caret: 3, keystrokes: 1)
+        harness.input.confirmTyping()
+        harness.input.reportValue()
+        harness.okLong()
+        expectEqual(harness.input.text, "AC")
+    }
+
+    func testOKLongPreservesTheManualCandidateConfirmedWithSpace() {
+        for handTyped in ["c", "词"] {
+            let harness = Harness()
+            harness.input.canDeleteAttributedVoiceText = true
+            harness.startVoiceCapture()
+            harness.finishVoiceCapture()
+            harness.commitVoiceText("AB", caret: 2)
+            harness.input.type("ABc", caret: 3, keystrokes: 1)
+            harness.input.pressSpace()
+            harness.input.updateValue("AB" + handTyped, caret: 3)
+            harness.okLong()
+            expectEqual(harness.input.text, "A" + handTyped)
+        }
+    }
+
+    func testOKLongDeletesCodexVoiceWithoutAnyLaterTyping() {
+        let harness = Harness()
+        harness.input.canDeleteAttributedVoiceText = true
+        harness.startVoiceCapture()
+        harness.input.setText("A语音🙂", caret: 3)
+        harness.finishVoiceCapture()
+        harness.bridge.tick(now: harness.now + .milliseconds(100))
+        harness.okLong()
+        expectEqual(harness.input.text, "A")
+    }
+
+    func testOKLongDeletesVoiceAfterCodexReplacesItsReadOnlyPrompt() {
+        for prompt in ["和 Codex 一起工作", "Start something new"] {
+            let harness = Harness()
+            harness.input.canDeleteAttributedVoiceText = true
+            harness.input.text = prompt + "\n"
+            harness.input.selection = NSRange(location: 0, length: 0)
+            harness.input.readOnlyWidget = prompt
+            harness.startVoiceCapture()
+            harness.finishVoiceCapture()
+            harness.input.readOnlyWidget = nil
+            harness.commitVoiceText("语音🙂", caret: 4)
+            harness.okLong()
+            expectEqual(harness.input.text, "")
+        }
+    }
+
+    func testOKLongKeepsAReadOnlyWidgetStillPresentAfterVoiceInput() {
+        let harness = Harness()
+        harness.input.canDeleteAttributedVoiceText = true
+        harness.input.text = "widget\n"
+        harness.input.selection = NSRange(location: 0, length: 0)
+        harness.input.readOnlyWidget = "widget"
+        harness.startVoiceCapture()
+        harness.finishVoiceCapture()
+        harness.input.readOnlyWidget = nil
+        harness.commitVoiceText("widget语音", caret: 8)
+        harness.okLong()
+        expectEqual(harness.input.text, "widget语音")
+    }
+
+    func testOKLongDoesNotTreatReturnWithoutManualTypingAsAConfirmation() {
+        let harness = Harness()
+        harness.input.canDeleteAttributedVoiceText = true
+        harness.startVoiceCapture()
+        harness.finishVoiceCapture()
+        harness.commitVoiceText("AB", caret: 2)
+        harness.input.confirmTyping()
+        harness.input.reportValue()
+        harness.okLong()
+        expectEqual(harness.input.text, "AB")
+    }
+
     func testQueuedReturnWaitsForLiveVoiceCompositionToClear() {
         let harness = Harness()
         harness.startVoiceCapture()
@@ -551,6 +650,7 @@ struct PassportBridgeTests {
         var canConfirmVoiceText = true
         var canDeleteAttributedVoiceText = false
         var composition: PassportTextComposition = .unknown
+        var readOnlyWidget: String?
         var hasFocus = true
         var isFocused: Bool { hasFocus }
         let sendKey: (PassportKeystroke) -> Void
@@ -564,7 +664,8 @@ struct PassportBridgeTests {
         }
 
         func snapshot() -> PassportTextState? {
-            hasFocus ? PassportTextState(text: text, selectedRange: selection, composition: composition) : nil
+            hasFocus ? PassportTextState(text: text, selectedRange: selection, composition: composition,
+                                          readOnlyWidget: readOnlyWidget) : nil
         }
 
         func stopMonitoringInput() {}
@@ -598,6 +699,8 @@ struct PassportBridgeTests {
         }
 
         func noteInput() { onEdit?(.input) }
+        func confirmTyping() { onEdit?(.typingConfirmationKey(insertsText: false)) }
+        func pressSpace() { onEdit?(.typingConfirmationKey(insertsText: true)) }
 
         func delete(_ range: NSRange, ifSnapshotIs expected: PassportTextState, onDeletion: @escaping () -> Void) {
             guard snapshot() == expected, let indices = Range(range, in: text) else { return }
@@ -847,6 +950,13 @@ tests.testOKLongDeletesLiveVoiceTextOnlyAfterCompositionIsConfirmedClear()
 tests.testLiveVoiceTextIsNotCommittedWhenCompositionCannotBeRead()
 tests.testOKLongDeletesAttributedVoiceTextInCodexAndKeepsTyping()
 tests.testOKLongPreservesAnIdenticalCodexReplacementAfterManualInput()
+tests.testOKLongWaitsForCodexSelectionToSettleAfterStop()
+tests.testOKLongIgnoresCodexValueEchoFromConfirmingManualTyping()
+tests.testOKLongPreservesTheManualCandidateConfirmedWithSpace()
+tests.testOKLongDeletesCodexVoiceWithoutAnyLaterTyping()
+tests.testOKLongDeletesVoiceAfterCodexReplacesItsReadOnlyPrompt()
+tests.testOKLongKeepsAReadOnlyWidgetStillPresentAfterVoiceInput()
+tests.testOKLongDoesNotTreatReturnWithoutManualTypingAsAConfirmation()
 tests.testQueuedReturnWaitsForLiveVoiceCompositionToClear()
 tests.testQueuedReturnAndDeletionWaitForCompositionObservedAfterStopToClear()
 tests.testOKLongDeletesCommittedVoiceTextAndKeepsLaterTyping()
@@ -878,4 +988,4 @@ tests.testSavedShortcutSendsItsKeyAndModifiersAfterReloadingBindings()
 tests.testRestoringDefaultsClearsAllSavedBindings()
 tests.testDownLongDoesNotSendOrQueueItsBindingDuringCapture()
 tests.testCustomReturnIsIgnoredWhileRecordingAndNeverDeferred()
-print("41 Passport bridge tests passed")
+print("48 Passport bridge tests passed")

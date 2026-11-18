@@ -60,9 +60,11 @@ struct PassportTextState: Equatable {
     let text: String
     let selectedRange: NSRange
     var composition: PassportTextComposition = .unknown
+    var readOnlyWidget: String? = nil
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.selectedRange == rhs.selectedRange && lhs.hasSameText(as: rhs) && lhs.composition == rhs.composition
+        lhs.selectedRange == rhs.selectedRange && lhs.hasSameText(as: rhs)
+            && lhs.composition == rhs.composition && lhs.readOnlyWidget == rhs.readOnlyWidget
     }
 
     func hasSameText(as other: Self) -> Bool { text.utf16.elementsEqual(other.text.utf16) }
@@ -74,23 +76,36 @@ struct PassportTextState: Equatable {
         return Range(range, in: text)
     }
 
-    // AX selections use UTF-16 offsets. The only accepted edit replaces the
-    // original selection and leaves the caret immediately after the new text.
-    func insertedRange(in updated: Self) -> NSRange? {
+    // AX selections use UTF-16 offsets. An insertion must leave the text on
+    // both sides of the original selection intact.
+    func insertedRange(in updated: Self, allowingCaretInsideInsertion: Bool = false) -> NSRange? {
         let start = selectedRange.location
-        let end = updated.selectedRange.location
         let oldText = Array(text.utf16)
         let newText = Array(updated.text.utf16)
         guard start >= 0, start <= oldText.count, selectedRange.length >= 0,
               selectedRange.length <= oldText.count - start,
-              updated.selectedRange.length == 0, end > start, end <= newText.count,
+              updated.selectedRange.length == 0, updated.indices(of: updated.selectedRange) != nil,
               oldText != newText else { return nil }
         let oldEnd = start + selectedRange.length
-        guard oldText[..<start].elementsEqual(newText[..<start]),
+        let end = newText.count - (oldText.count - oldEnd)
+        let caret = updated.selectedRange.location
+        guard end > start,
+              caret == end || (allowingCaretInsideInsertion && caret >= start && caret < end),
+              oldText[..<start].elementsEqual(newText[..<start]),
               oldText[oldEnd...].elementsEqual(newText[end...]) else { return nil }
         let inserted = NSRange(location: start, length: end - start)
         guard Range(selectedRange, in: text) != nil, Range(inserted, in: updated.text) != nil else { return nil }
         return inserted
+    }
+
+    func attributedVoiceRange(in updated: Self) -> NSRange? {
+        guard updated.readOnlyWidget == nil else { return nil }
+        if let inserted = insertedRange(in: updated, allowingCaretInsideInsertion: true) { return inserted }
+        // A read-only widget can disappear when the first editable text arrives.
+        // Keep the raw baseline whenever its widget is still present.
+        guard let readOnlyWidget, updated.text.range(of: readOnlyWidget, options: .literal) == nil else { return nil }
+        let empty = Self(text: "", selectedRange: NSRange(location: 0, length: 0))
+        return empty.insertedRange(in: updated, allowingCaretInsideInsertion: true)
     }
 
     func retainedRange(_ range: NSRange, in updated: Self) -> NSRange? {
@@ -127,6 +142,7 @@ enum PassportEditObservation {
     case value(PassportTextState)
     case selection(PassportTextState)
     case typing
+    case typingConfirmationKey(insertsText: Bool)
     case input
     case deletion(backward: Bool)
     case uncertain

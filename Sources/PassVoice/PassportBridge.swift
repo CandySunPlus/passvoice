@@ -73,9 +73,22 @@ final class PassportBridge {
         var canContinue: Bool {
             guard let current = snapshot() else { return false }
             if current.hasSameText(as: baseline), current.selectedRange == baseline.selectedRange { return true }
-            guard baseline.insertedRange(in: current) != nil else { return false }
+            guard insertedRange(in: current) != nil else { return false }
             requiresCompositionConfirmation = true
             return true
+        }
+
+        var canWaitForAttributedInsertion: Bool {
+            // An editor can still expose an intermediate selection when audio stops.
+            // Wait for an exact insertion as long as this field is undisturbed.
+            target.canDeleteAttributedVoiceText && target.canConfirmVoiceText && target.isFocused
+        }
+
+        var canObserveAfterStop: Bool { canContinue || canWaitForAttributedInsertion }
+
+        func insertedRange(in updated: PassportTextState) -> NSRange? {
+            target.canDeleteAttributedVoiceText ? baseline.attributedVoiceRange(in: updated)
+                : baseline.insertedRange(in: updated)
         }
     }
 
@@ -94,12 +107,13 @@ final class PassportBridge {
     }
 
     private final class CommittedVoiceInput {
-        private enum PendingEdit { case typing, other }
+        private enum PendingEdit { case typing, typingConfirmation, other }
 
         let target: PassportVoiceTarget
         private(set) var snapshot: PassportTextState
         private(set) var range: NSRange
         private var pendingEdit: PendingEdit?
+        private var lastTypingCaret: NSRange?
         private var voiceBaseline: PassportTextState?
         var inputPending: Bool { pendingEdit != nil }
 
@@ -118,7 +132,8 @@ final class PassportBridge {
             // While the stopped IME is finalizing and no other input has
             // occurred, only the original insertion may change.
             guard updated.composition != .composing,
-                  let revised = voiceBaseline.insertedRange(in: updated) else { return false }
+                  let revised = voiceBaseline.attributedVoiceRange(in: updated)
+            else { return false }
             snapshot = updated
             range = revised
             return true
@@ -128,6 +143,10 @@ final class PassportBridge {
             switch observation {
             case let .value(updated):
                 if let kept = reviseAttributedVoice(updated) { return kept }
+                if pendingEdit == .typingConfirmation, updated == snapshot {
+                    self.pendingEdit = nil
+                    return true
+                }
                 // A value notification with identical text can be a same-text replacement
                 // or a pair of edits coalesced by the input. Neither preserves attribution.
                 guard let pendingEdit, !updated.hasSameText(as: snapshot),
@@ -137,32 +156,56 @@ final class PassportBridge {
                 snapshot = updated
                 range = retained
                 self.pendingEdit = nil
+                lastTypingCaret = pendingEdit == .typing && target.canDeleteAttributedVoiceText
+                    ? updated.selectedRange : nil
                 return true
             case let .selection(updated):
                 if let kept = reviseAttributedVoice(updated) { return kept }
                 guard let retained = snapshot.retainedRange(range, in: updated),
                       NSIntersectionRange(retained, updated.selectedRange).length == 0 else { return false }
-                if updated.hasSameText(as: snapshot) { snapshot = updated }
+                if updated.hasSameText(as: snapshot) {
+                    snapshot = updated
+                    if lastTypingCaret != updated.selectedRange { lastTypingCaret = nil }
+                }
                 return true
             case .typing:
-                finishAttribution()
-                guard pendingEdit != .other else { return false }
-                pendingEdit = .typing
-                return true
+                return beginTyping()
+            case let .typingConfirmationKey(insertsText):
+                if pendingEdit == nil, lastTypingCaret == snapshot.selectedRange {
+                    // The last insertion was verified outside the voice range.
+                    // An IME can commit that typing without changing the AX value.
+                    lastTypingCaret = nil
+                    pendingEdit = .typingConfirmation
+                    return true
+                }
+                return insertsText ? beginTyping() : beginOtherInput()
             case let .deletion(backward):
                 let caret = snapshot.selectedRange.location
                 if backward ? (caret > range.location && caret <= NSMaxRange(range))
                     : (caret >= range.location && caret < NSMaxRange(range)) { return false }
                 fallthrough
             case .input:
-                finishAttribution()
-                // Multiple edits without a value observation can hide a remove-and-retype.
-                guard pendingEdit == nil else { return false }
-                pendingEdit = .other
-                return true
+                return beginOtherInput()
             case .uncertain:
                 return false
             }
+        }
+
+        private func beginTyping() -> Bool {
+            finishAttribution()
+            lastTypingCaret = nil
+            guard pendingEdit == nil || pendingEdit == .typing else { return false }
+            pendingEdit = .typing
+            return true
+        }
+
+        private func beginOtherInput() -> Bool {
+            finishAttribution()
+            lastTypingCaret = nil
+            // Multiple edits without a value observation can hide a remove-and-retype.
+            guard pendingEdit == nil else { return false }
+            pendingEdit = .other
+            return true
         }
     }
 
@@ -359,7 +402,7 @@ final class PassportBridge {
             } ?? false
             earlyReturn = nil
             voiceCommitWait = VoiceCommitWait(
-                deadline: now + .seconds(5), origin: origin?.canContinue == true ? origin : nil,
+                deadline: now + .seconds(5), origin: origin?.canObserveAfterStop == true ? origin : nil,
                 returnQueued: queuedReturn
             )
             statusChanged(.finishing)
@@ -447,12 +490,12 @@ final class PassportBridge {
         }
         guard wait.stopShortcutSent, !wait.tracksAttributedVoice, let origin = wait.origin else { return }
         guard let updated = origin.snapshot() else {
-            voiceCommitWait?.origin = nil
+            if !origin.canWaitForAttributedInsertion { voiceCommitWait?.origin = nil }
             return
         }
         guard updated != origin.baseline else { return }
-        guard let range = origin.baseline.insertedRange(in: updated) else {
-            voiceCommitWait?.origin = nil
+        guard let range = origin.insertedRange(in: updated) else {
+            if !origin.canWaitForAttributedInsertion { voiceCommitWait?.origin = nil }
             return
         }
         if updated.composition == .unknown, origin.target.canDeleteAttributedVoiceText {
@@ -592,7 +635,7 @@ final class PassportBridge {
         guard let capture else { return }
         self.capture = nil
         capture.playback.stop()
-        let canConfirmCommit = endingNormally && voiceCommitWait?.origin?.canContinue == true
+        let canConfirmCommit = endingNormally && voiceCommitWait?.origin?.canObserveAfterStop == true
         if !canConfirmCommit { voiceCommitWait?.origin = nil }
         do {
             if let tapVoiceKey {

@@ -32,6 +32,10 @@ enum PassportMacInput {
 
 // All observations and calls run on the main run loop, alongside the bridge.
 private final class MacVoiceTarget: PassportVoiceTarget {
+    private enum CodexEditorContent {
+        case empty, readOnlyWidget(String)
+    }
+
     private static let systemAccessibility: AXUIElement = {
         let system = AXUIElementCreateSystemWide()
         // This timeout applies to AX messages from PassVoice, including focus queries.
@@ -57,6 +61,7 @@ private final class MacVoiceTarget: PassportVoiceTarget {
 
     private let element: AXUIElement
     private let processID: pid_t
+    private let isCodexEditor: Bool
     let canDeleteAttributedVoiceText: Bool
     private var lostFocus = false
     private var otherInput = false
@@ -68,10 +73,11 @@ private final class MacVoiceTarget: PassportVoiceTarget {
     private var inputSourceObserver: NSObjectProtocol?
     private var onEdit: ((PassportEditObservation) -> Void)?
 
-    private init(element: AXUIElement, processID: pid_t, canDeleteAttributedVoiceText: Bool) {
+    private init(element: AXUIElement, processID: pid_t, isCodexEditor: Bool, isTextEdit: Bool) {
         self.element = element
         self.processID = processID
-        self.canDeleteAttributedVoiceText = canDeleteAttributedVoiceText
+        self.isCodexEditor = isCodexEditor
+        canDeleteAttributedVoiceText = isCodexEditor || isTextEdit
     }
 
     static func observe() -> MacVoiceTarget? {
@@ -84,10 +90,13 @@ private final class MacVoiceTarget: PassportVoiceTarget {
         let subrole = attribute(kAXSubroleAttribute, of: element) as? String
         guard role == kAXTextFieldRole || role == kAXTextAreaRole || role == kAXComboBoxRole,
               subrole != kAXSecureTextFieldSubrole else { return nil }
-        let isCodexEditor = role == kAXTextAreaRole
-            && NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == "com.openai.codex"
+        let bundle = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+        let isCodexEditor = role == kAXTextAreaRole && bundle == "com.openai.codex"
             && attribute("AXSelectedTextMarkerRange", of: element) != nil
-        let target = MacVoiceTarget(element: element, processID: pid, canDeleteAttributedVoiceText: isCodexEditor)
+        let isTextEdit = role == kAXTextAreaRole && bundle == "com.apple.TextEdit"
+            && attributeIsSettable(kAXSelectedTextRangeAttribute as CFString, of: element) == true
+            && attributeIsSettable(kAXSelectedTextAttribute as CFString, of: element) == true
+        let target = MacVoiceTarget(element: element, processID: pid, isCodexEditor: isCodexEditor, isTextEdit: isTextEdit)
         guard target.observeFocus() && target.observeInput() else { return nil }
         return target
     }
@@ -113,11 +122,53 @@ private final class MacVoiceTarget: PassportVoiceTarget {
         let names = [kAXValueAttribute, kAXSelectedTextRangeAttribute] as CFArray
         guard AXUIElementCopyMultipleAttributeValues(element, names, .stopOnError, &attributes) == .success,
               let values = attributes as? [AnyObject], values.count == 2,
-              let text = values[0] as? String,
+              let value = values[0] as? String,
               let selection = Self.textRange(from: values[1]) else { return nil }
         let composition = compositionState()
+        let content = isCodexEditor && composition != .composing ? codexEditorContent(value, at: selection) : nil
         guard stillFocused() else { return nil }
-        return PassportTextState(text: text, selectedRange: selection, composition: composition)
+        switch content {
+        case .empty:
+            return PassportTextState(text: "", selectedRange: selection, composition: composition)
+        case let .readOnlyWidget(label):
+            return PassportTextState(text: value, selectedRange: selection, composition: composition, readOnlyWidget: label)
+        case nil:
+            return PassportTextState(text: value, selectedRange: selection, composition: composition)
+        }
+    }
+
+    private func codexEditorContent(_ value: String, at selection: NSRange) -> CodexEditorContent? {
+        guard selection == NSRange(location: 0, length: 0), !value.isEmpty else { return nil }
+        let isEmptyLine = value == "\n"
+        let prompt = value.last == "\n" ? String(value.dropLast()) : value
+        guard isEmptyLine || (!prompt.isEmpty && !prompt.contains(where: \.isNewline)) else { return nil }
+
+        // Chromium can include a read-only widget's text in the editable value.
+        // Recognize the widget only when it accounts for the entire value.
+        let selectionAttribute = kAXSelectedTextRangeAttribute as CFString
+        var container = element
+        for _ in 0..<3 {
+            guard let children = Self.attribute(kAXChildrenAttribute, of: container) as? [AXUIElement],
+                  children.count == 1,
+                  let child = children.first,
+                  Self.attribute(kAXRoleAttribute, of: child) as? String == kAXGroupRole else { return nil }
+            if isEmptyLine {
+                // An empty Chromium editor can expose only its caret line.
+                // Typing Enter or Shift-Enter adds another line break to AXValue.
+                return (Self.attribute(kAXChildrenAttribute, of: child) as? [AXUIElement])?.isEmpty == true ? .empty : nil
+            }
+            if Self.attributeIsSettable(selectionAttribute, of: child) == false {
+                guard let contents = Self.attribute(kAXChildrenAttribute, of: child) as? [AXUIElement],
+                      contents.count == 1, let text = contents.first,
+                      Self.attribute(kAXRoleAttribute, of: text) as? String == kAXStaticTextRole,
+                      Self.attributeIsSettable(selectionAttribute, of: text) == false,
+                      let title = Self.attribute(kAXValueAttribute, of: text) as? String,
+                      title.utf16.elementsEqual(prompt.utf16) else { return nil }
+                return .readOnlyWidget(prompt)
+            }
+            container = child
+        }
+        return nil
     }
 
     func send(_ key: PassportKeystroke, ifSnapshotIs expected: PassportTextState) throws {
@@ -137,7 +188,7 @@ private final class MacVoiceTarget: PassportVoiceTarget {
 
         let selected = PassportTextState(text: expected.text, selectedRange: range, composition: expected.composition)
         let remaining = expected.text.replacingCharacters(in: indices, with: "")
-        if canDeleteAttributedVoiceText {
+        if isCodexEditor {
             guard expected.composition != .composing else { return }
             let revision = inputRevision
             guard AXUIElementSetAttributeValue(element, selectionAttribute, voiceSelection) == .success else { return }
@@ -196,7 +247,7 @@ private final class MacVoiceTarget: PassportVoiceTarget {
     private func confirmCodexDeletion(before: PassportTextState, remaining: String, revision: UInt64,
                                       attempts: Int, onDeletion: @escaping () -> Void) {
         guard inputRevision == revision, let current = snapshot() else { return }
-        if current.text.utf16.elementsEqual(remaining.utf16) {
+        if current.text.utf16.elementsEqual(remaining.utf16) || (remaining.isEmpty && current.readOnlyWidget != nil) {
             onDeletion()
         } else if current.hasSameText(as: before), attempts > 0 {
             DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(20)) {
@@ -266,15 +317,20 @@ private final class MacVoiceTarget: PassportVoiceTarget {
     }
 
     private func isSettable(_ attribute: CFString) -> Bool {
+        Self.attributeIsSettable(attribute, of: element) == true
+    }
+
+    private static func attributeIsSettable(_ attribute: CFString, of element: AXUIElement) -> Bool? {
         var settable = DarwinBoolean(false)
-        return AXUIElementIsAttributeSettable(element, attribute, &settable) == .success && settable.boolValue
+        guard AXUIElementIsAttributeSettable(element, attribute, &settable) == .success else { return nil }
+        return settable.boolValue
     }
 
     private func hasOnlySelection(_ selection: NSRange) -> Bool {
         var value: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(element, kAXSelectedTextRangesAttribute as CFString, &value)
         if result == .attributeUnsupported { return true }
-        if canDeleteAttributedVoiceText, result == .failure || result == .noValue,
+        if isCodexEditor, result == .failure || result == .noValue,
            let single = Self.attribute(kAXSelectedTextRangeAttribute, of: element), Self.textRange(from: single) == selection,
            let marker = Self.attribute("AXSelectedTextMarkerRange", of: element) {
             var length: CFTypeRef?
@@ -362,6 +418,9 @@ private final class MacVoiceTarget: PassportVoiceTarget {
                 onEdit(.uncertain)
             } else if keyCode == kVK_Delete || keyCode == kVK_ForwardDelete {
                 onEdit(.deletion(backward: keyCode == kVK_Delete))
+            } else if canDeleteAttributedVoiceText, !event.flags.contains(.maskShift),
+                      [kVK_Space, kVK_Return, kVK_ANSI_KeypadEnter].contains(keyCode) {
+                onEdit(.typingConfirmationKey(insertsText: keyCode == kVK_Space))
             } else if Self.typingKeys.contains(keyCode) {
                 onEdit(.typing)
             } else if ![kVK_LeftArrow, kVK_RightArrow, kVK_UpArrow, kVK_DownArrow].contains(keyCode) {
