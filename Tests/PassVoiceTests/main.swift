@@ -133,6 +133,32 @@ struct PassportBridgeTests {
         expectEqual(harness.input.text, "A")
     }
 
+    func testQueuedReturnAndDeletionWaitForCompositionObservedAfterStopToClear() {
+        let harness = Harness()
+        harness.startVoiceCapture()
+        harness.finishVoiceCapture()
+        harness.downClick()
+        harness.input.text = "AB"
+        harness.input.selection = NSRange(location: 2, length: 0)
+        harness.input.composition = .composing
+        harness.bridge.tick(now: harness.now + .milliseconds(100))
+        expectEqual(harness.keys, [])
+        harness.okLong()
+        expectEqual(harness.input.text, "AB")
+
+        harness.input.composition = .unknown
+        harness.bridge.tick(now: harness.now + .milliseconds(200))
+        expectEqual(harness.keys, [])
+        harness.okLong()
+        expectEqual(harness.input.text, "AB")
+
+        harness.input.composition = .clear
+        harness.bridge.tick(now: harness.now + .milliseconds(300))
+        expectEqual(harness.keys, [.returnKey])
+        harness.okLong()
+        expectEqual(harness.input.text, "A")
+    }
+
     func testOKLongDeletesCommittedVoiceTextAndKeepsLaterTyping() {
         let harness = Harness()
         harness.startVoiceCapture()
@@ -784,6 +810,7 @@ tests.testQueuedReturnExpiresBeforeALateCommitAndNewPressWorks()
 tests.testOKLongDeletesLiveVoiceTextOnlyAfterCompositionIsConfirmedClear()
 tests.testLiveVoiceTextIsNotCommittedWhenCompositionCannotBeRead()
 tests.testQueuedReturnWaitsForLiveVoiceCompositionToClear()
+tests.testQueuedReturnAndDeletionWaitForCompositionObservedAfterStopToClear()
 tests.testOKLongDeletesCommittedVoiceTextAndKeepsLaterTyping()
 tests.testOKLongKeepsTypingInsertedBeforeTheCommittedRange()
 tests.testOKLongSkipsWhenRepeatedTextMakesTheRangeAmbiguous()
@@ -813,4 +840,4 @@ tests.testSavedShortcutSendsItsKeyAndModifiersAfterReloadingBindings()
 tests.testRestoringDefaultsClearsAllSavedBindings()
 tests.testDownLongDoesNotSendOrQueueItsBindingDuringCapture()
 tests.testCustomReturnIsIgnoredWhileRecordingAndNeverDeferred()
-print("38 Passport bridge tests passed")
+print("39 Passport bridge tests passed")

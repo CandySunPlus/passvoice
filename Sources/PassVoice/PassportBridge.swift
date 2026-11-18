@@ -56,7 +56,7 @@ final class PassportBridge {
     private final class VoiceOrigin {
         let target: PassportVoiceTarget
         let baseline: PassportTextState
-        private(set) var observedLiveText = false
+        private(set) var requiresCompositionConfirmation = false
 
         init(target: PassportVoiceTarget, baseline: PassportTextState) {
             self.target = target
@@ -65,14 +65,16 @@ final class PassportBridge {
 
         func snapshot() -> PassportTextState? {
             guard target.canConfirmVoiceText else { return nil }
-            return target.snapshot()
+            let current = target.snapshot()
+            if current?.composition == .composing { requiresCompositionConfirmation = true }
+            return current
         }
 
         var canContinue: Bool {
             guard let current = snapshot() else { return false }
             if current.hasSameText(as: baseline), current.selectedRange == baseline.selectedRange { return true }
             guard baseline.insertedRange(in: current) != nil else { return false }
-            observedLiveText = true
+            requiresCompositionConfirmation = true
             return true
         }
     }
@@ -431,7 +433,7 @@ final class PassportBridge {
         // AX values can contain live IME text. A live candidate needs an explicit
         // clear composition state after the stop shortcut, even if its text is unchanged.
         guard updated.composition != .composing,
-              !origin.observedLiveText || updated.composition == .clear else { return }
+              !origin.requiresCompositionConfirmation || updated.composition == .clear else { return }
         voiceCommitWait = nil
         unresolvedCommitTarget = nil
         let committed = CommittedVoiceInput(target: origin.target, snapshot: updated, range: range)
