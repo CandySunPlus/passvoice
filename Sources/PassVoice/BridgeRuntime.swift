@@ -6,6 +6,7 @@ final class BridgeRuntime {
     private let device: UUID?
     private let manual: Bool
     private let verbose: Bool
+    private let resolveAction: (PassportGesture) -> PassportAction
     private let log: (String) -> Void
     private let onStatus: (PassportStatus) -> Void
     private let onDevice: (UUID, String) -> Void
@@ -21,6 +22,7 @@ final class BridgeRuntime {
         device: UUID?,
         manual: Bool = false,
         verbose: Bool = false,
+        resolveAction: @escaping (PassportGesture) -> PassportAction = PassportAction.defaultAction,
         log: @escaping (String) -> Void,
         onStatus: @escaping (PassportStatus) -> Void = { _ in },
         onDevice: @escaping (UUID, String) -> Void = { _, _ in },
@@ -30,6 +32,7 @@ final class BridgeRuntime {
         self.device = device
         self.manual = manual
         self.verbose = verbose
+        self.resolveAction = resolveAction
         self.log = log
         self.onStatus = onStatus
         self.onDevice = onDevice
@@ -41,6 +44,11 @@ final class BridgeRuntime {
         let bridge = PassportBridge(
             makePlayback: BlackHolePlayback.init(onInvalidation:),
             tapVoiceKey: manual || device == nil ? nil : VoiceHotkey.tapRightOption,
+            resolveAction: resolveAction,
+            sendKey: { [manual] key in
+                if !manual { try PassportMacInput.send(key) }
+            },
+            observeVoiceTarget: PassportMacInput.observeVoiceTarget,
             send: { [weak self] command in self?.send(command) },
             log: log,
             statusChanged: onStatus,

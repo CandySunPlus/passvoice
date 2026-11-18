@@ -3,6 +3,8 @@ import CoreGraphics
 import Foundation
 
 struct VoiceHotkey {
+    static let eventTag: Int64 = 0x5061_7373_566F_6963
+
     static func checkAccess() throws {
         guard CGPreflightPostEventAccess() else {
             throw BridgeError("""
@@ -25,8 +27,10 @@ struct VoiceHotkey {
             throw BridgeError("Release the physical right Option key before using the Passport shortcut")
         }
         down.type = .flagsChanged
+        down.setIntegerValueField(.eventSourceUserData, value: eventTag)
         down.flags = originalFlags.union([.maskAlternate, rightOption])
         up.type = .flagsChanged
+        up.setIntegerValueField(.eventSourceUserData, value: eventTag)
         up.flags = originalFlags
         down.post(tap: .cghidEventTap)
         Thread.sleep(forTimeInterval: 0.035)

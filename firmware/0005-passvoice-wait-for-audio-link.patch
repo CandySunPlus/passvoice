@@ -1,0 +1,155 @@
+From fe8f68826d7ccfe9a248c59681dc9e1ea7031e90 Mon Sep 17 00:00:00 2001
+From: NikSun <candysfm@gmail.com>
+Date: Wed, 18 Nov 2026 10:59:42 +0800
+Subject: [PATCH] fix(ble): wait for the Mac audio link update
+
+Allow 3 seconds for an idle link to return to its audio interval. The measured Mac callback arrived after 1531 ms, beyond the previous 1500 ms deadline, so the first UP failed before the accepted request completed.
+
+Replay that delay through ble_audio_link_prepare and retain the true timeout and cancellation checks. Keep protocol timing and bilingual changelogs aligned.
+
+Validation: focused regression red before fix; ./tools/validate.sh --static passes. Firmware build and device acceptance are tracked separately.
+---
+ docs/CHANGELOG.md                      |  4 +++-
+ docs/CHANGELOG.zh_CN.md                |  4 +++-
+ docs/ai-passport-ble-protocol.md       |  3 +++
+ docs/ai-passport-ble-protocol.zh_CN.md |  2 ++
+ main/ble_audio_link.h                  |  4 +++-
+ tests/test_ble_audio_link.c            | 25 ++++++++++++++++++++++---
+ 6 files changed, 36 insertions(+), 6 deletions(-)
+
+diff --git a/docs/CHANGELOG.md b/docs/CHANGELOG.md
+index a97496e..81abf74 100644
+--- a/docs/CHANGELOG.md
++++ b/docs/CHANGELOG.md
+@@ -6,7 +6,9 @@
+
+ ## Unreleased
+
+-- Avoid redundant BLE idle updates when the negotiated link already uses 90–120 ms. After edit-button activity, the next UP can restore the 15 ms audio interval without being blocked by a redundant 40-second connection update. Track only accepted idle updates while preserving the 1500 ms audio-start deadline and low-power standby policy.
++- Wait up to 3 seconds for the audio link to recover from idle, accommodating the measured 1531 ms Mac connection update so the first UP can start capture. Preserve cancellation and the bounded failure path.
++
++- Avoid redundant BLE idle updates when the negotiated link already uses 90–120 ms. After edit-button activity, the next UP can restore the 15 ms audio interval without being blocked by a redundant 40-second connection update. Track only accepted idle updates while preserving a bounded audio-start deadline and low-power standby policy.
+
+ - Report a 650 ms DOWN hold to PassVoice as a BLE V1 button event, including a hold immediately following a tap. Each press reports at most one gesture. Other hosts still receive only DOWN clicks.
+
+diff --git a/docs/CHANGELOG.zh_CN.md b/docs/CHANGELOG.zh_CN.md
+index d0533b0..4baa6e7 100644
+--- a/docs/CHANGELOG.zh_CN.md
++++ b/docs/CHANGELOG.zh_CN.md
+@@ -6,7 +6,9 @@
+
+ ## Unreleased
+
+-- 当协商后的 BLE 间隔已为 90–120 ms 时，不重复请求空闲更新。编辑按键活动后，下次 UP 可恢复 15 ms 音频间隔，避免被冗余的 40 秒连接更新阻塞。只跟踪实际接受的空闲更新，保留 1500 ms 音频启动期限及低功耗待机策略。
++- 从空闲恢复音频连接时最多等待 3 秒，容纳实测耗时 1531 ms 的 Mac 连接更新，让首次 UP 即可开始采集。保留取消和有界失败行为。
++
++- 当协商后的 BLE 间隔已为 90–120 ms 时，不重复请求空闲更新。编辑按键活动后，下次 UP 可恢复 15 ms 音频间隔，避免被冗余的 40 秒连接更新阻塞。只跟踪实际接受的空闲更新，保留有界音频启动期限及低功耗待机策略。
+
+ - 通过 BLE V1 按键事件向 PassVoice 上报 650 ms 的 DOWN 长按，紧接短按的长按也可识别。每次按压最多上报一种手势。其它主机仍只收到 DOWN 短按。
+
+diff --git a/docs/ai-passport-ble-protocol.md b/docs/ai-passport-ble-protocol.md
+index b1585b2..50eba7d 100644
+--- a/docs/ai-passport-ble-protocol.md
++++ b/docs/ai-passport-ble-protocol.md
+@@ -178,6 +178,9 @@ These are host implementation limits, not additional BLE fields.
+ The peripheral requests a fixed 15 ms connection interval with zero peripheral
+ latency and a 251-byte link-layer transmit data length. The central may choose
+ different values; neither request changes the V1 wire format or minimum ATT MTU.
++After an idle link, capture preparation waits up to 3 seconds for the audio
++interval update. A stopped capture or disconnected/replaced link cancels the
++wait. No PTT start is emitted until preparation succeeds.
+ Temporary local enqueue failures (`ENOMEM`, `EAGAIN`, `EBUSY`) retry the same audio
+ fragment for at most 80 ms, only on the audio worker. PTT start/end notifications
+ have a 200 ms retry bound. Accepted notifications are never resent by this
+diff --git a/docs/ai-passport-ble-protocol.zh_CN.md b/docs/ai-passport-ble-protocol.zh_CN.md
+index 48c5d50..63ff1a5 100644
+--- a/docs/ai-passport-ble-protocol.zh_CN.md
++++ b/docs/ai-passport-ble-protocol.zh_CN.md
+@@ -139,6 +139,8 @@ Vokie 插件把单次会话限制为 15,000 个音频帧（五分钟），等待
+
+ 外设会请求固定 15 ms 的连接间隔、零外设延迟及 251 字节链路层发送数据长度。
+ 中心设备可以选择其他参数；这两项请求不改变 V1 线上格式或最低 ATT MTU。
++从空闲连接开始采集时，准备阶段最多等待 3 秒完成音频间隔更新。停止采集、断连或
++替换连接会取消等待。准备成功后才发送 PTT 开始通知。
+ 临时的本地入队失败（`ENOMEM`、`EAGAIN`、`EBUSY`）仅在音频工作任务中重试同一
+ 音频分片，上限 80 ms；PTT 开始/结束通知的重试上限为 200 ms。该策略不重发已接受
+ 的通知，仅在全部分片入队后递增音频序号。断连、取消订阅或替换会话会使待重试数据
+diff --git a/main/ble_audio_link.h b/main/ble_audio_link.h
+index 978d71b..adbf1ce 100644
+--- a/main/ble_audio_link.h
++++ b/main/ble_audio_link.h
+@@ -3,7 +3,9 @@
+ #include <stdbool.h>
+ #include <stdint.h>
+
+-#define BLE_AUDIO_LINK_TIMEOUT_MS 1500
++// Mac acceptance measured a successful fast-link update after 1531 ms.
++// Allow scheduling margin while keeping preparation bounded and cancellable.
++#define BLE_AUDIO_LINK_TIMEOUT_MS 3000
+ #define BLE_LINK_RETRY_MS 250
+
+ // Owned by the audio worker; reset when the connection epoch changes.
+diff --git a/tests/test_ble_audio_link.c b/tests/test_ble_audio_link.c
+index c49340c..1174b1e 100644
+--- a/tests/test_ble_audio_link.c
++++ b/tests/test_ble_audio_link.c
+@@ -4,7 +4,7 @@
+ #include <stdio.h>
+
+ typedef struct {
+-    uint32_t now, updates, complete_at, cancel_at;
++    uint32_t now, updates, complete_at, cancel_at, audio_update_delay_ms;
+     uint16_t interval, target;
+     bool pending, valid;
+ } host_t;
+@@ -34,7 +34,8 @@ static int request(void *arg, bool idle)
+     host->target = idle ? VOKIE_IDLE_INTERVAL_MAX : VOKIE_AUDIO_INTERVAL;
+     // Reproduce the captured Mac behavior: a redundant idle request has no
+     // completion for 40 seconds, blocking all following audio requests.
+-    host->complete_at = host->now + (idle && matches(host, true) ? 40000 : 220);
++    const uint32_t delay = !idle && host->audio_update_delay_ms ? host->audio_update_delay_ms : 220;
++    host->complete_at = host->now + (idle && matches(host, true) ? 40000 : delay);
+     host->pending = true;
+     return 0;
+ }
+@@ -84,6 +85,23 @@ static void capture_waits_for_an_accepted_idle_update(void)
+     assert(host.now >= 440 && host.now < BLE_AUDIO_LINK_TIMEOUT_MS);
+ }
+
++static void first_capture_waits_for_the_mac_audio_link_update(void)
++{
++    // Device acceptance: the accepted fast request completed after 1531 ms,
++    // just after the old 1500 ms deadline made the first UP show Slow BLE.
++    host_t host = {.now = 123761, .interval = VOKIE_IDLE_INTERVAL_MAX, .valid = true,
++                   .audio_update_delay_ms = 1531};
++    ble_audio_link_t state = {0};
++    const ble_audio_link_ops_t callbacks = ops(&host);
++    assert(ble_audio_link_idle(&state, &callbacks) == 0);
++    const bool ready = ble_audio_link_prepare(&state, &callbacks);
++    printf("first capture after Mac update: ready=%d elapsed=%u ms\n", ready, host.now - 123761);
++    fflush(stdout);
++    assert(ready); // The first UP must proceed without requiring a second UP.
++    assert(matches(&host, false));
++    assert(host.now - 123761 >= 1531 && host.now - 123761 <= 1551);
++}
++
+ static void satisfied_idle_does_not_invent_a_pending_update(void)
+ {
+     host_t host = {.interval = VOKIE_IDLE_INTERVAL_MAX, .valid = true};
+@@ -104,7 +122,7 @@ static void genuinely_blocked_audio_link_keeps_the_deadline(void)
+     ble_audio_link_t state = {.slowed = true};
+     const ble_audio_link_ops_t callbacks = ops(&host);
+     assert(!ble_audio_link_prepare(&state, &callbacks));
+-    assert(host.now == BLE_AUDIO_LINK_TIMEOUT_MS);
++    assert(host.now == 3000);
+ }
+
+ static void stopped_or_replaced_capture_cancels_the_wait(void)
+@@ -120,6 +138,7 @@ int main(void)
+ {
+     capture_resumes_after_editing_on_an_idle_link();
+     capture_waits_for_an_accepted_idle_update();
++    first_capture_waits_for_the_mac_audio_link_update();
+     satisfied_idle_does_not_invent_a_pending_update();
+     genuinely_blocked_audio_link_keeps_the_deadline();
+     stopped_or_replaced_capture_cancels_the_wait();

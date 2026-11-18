@@ -2,7 +2,7 @@
 
 ### Issue tracker
 
-读取或发布规格、工单时，按 [GitHub Issues 操作约定](docs/agents/issue-tracker.md) 使用 `CandySunPlus/passvoice`。
+读取、发布、验收或关闭规格、工单及 PR 时，按 [GitHub Issues 操作约定](docs/agents/issue-tracker.md) 使用 `CandySunPlus/passvoice`。
 
 ### Triage labels
 

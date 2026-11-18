@@ -1,0 +1,495 @@
+From cf112140607e0e3eb7912b6d328b64a9ef6555a9 Mon Sep 17 00:00:00 2001
+From: NikSun <candysfm@gmail.com>
+Date: Tue, 17 Nov 2026 20:57:14 +0800
+Subject: [PATCH] fix(ble): deliver PassVoice gestures from the audio worker
+
+---
+ docs/ai-passport-ble-protocol.md       |  30 ++++--
+ docs/ai-passport-ble-protocol.zh_CN.md |  21 ++--
+ main/button_gesture.h                  |  19 +++-
+ main/vokie_ble.c                       | 139 +++++++++++++++++--------
+ tests/test_button_gesture.c            |  20 ++++
+ 5 files changed, 166 insertions(+), 63 deletions(-)
+
+diff --git a/docs/ai-passport-ble-protocol.md b/docs/ai-passport-ble-protocol.md
+index 73dab77..b1585b2 100644
+--- a/docs/ai-passport-ble-protocol.md
++++ b/docs/ai-passport-ble-protocol.md
+@@ -89,15 +89,27 @@ sending `"host":"passvoice"` in `host_ready`. Both `DOWN` and `OK` report
+ `click` or `long` through `button_event`. Each key uses its own 650 ms hold
+ timer, including after a quick tap. The hold is the only event for that press.
+ Only an `UP` click can end capture in this mode. `DOWN` and `OK` gestures
+-that begin or trigger during
+-capture are suppressed. A fresh press can trigger immediately after `UP`
+-requests the stop. If the worker has not finished sending `ptt_up`, that
+-`button_event` includes an optional `sessionId` for the stopped capture. The
+-notification may arrive before `ptt_down` or `ptt_up`. The host uses the
+-session ID to wait for a matching normal stop before acting on a deferred
+-Return. Firmware predating this mode ignores the optional `host` field.
+-Firmware predating `DOWN` hold support reports only its `click` event. Other
+-hosts retain the mapping above, with `DOWN` reporting only clicks.
++that begin or trigger during capture are suppressed. A fresh press can trigger
++immediately after `UP` requests the stop. The audio worker queues its
++`button_event` after successfully queueing `ptt_up`, with an optional
++`sessionId` identifying the capture if the gesture triggered before
++`ptt_up` was sent. A gesture that begins or triggers after the UP stop
++request and before `ptt_up` requires that normal stop. The worker discards
++it on capture failure or a change of session or connection. Earlier firmware could notify
++a tagged gesture before `ptt_down` or `ptt_up`. The host uses the tag
++to associate a deferred Return with the matching normal stop.
++
++PassVoice owns the editing bindings and the timing of text actions. The display
++may show the existing VOICE, SEND and UNDO hints on a physical press. They
++identify the keys and do not reflect customized bindings or confirm an edit.
++The firmware uses Recording and Processing for capture and its normal stop.
++The host resumes Ready after it finishes audio playback. Text can still be
++committing on the Mac at that point, and the firmware does not show an edit
++result for DOWN or OK in PassVoice mode.
++
++Firmware predating PassVoice mode ignores the optional `host` field. Firmware
++predating DOWN hold support reports only its `click` event. Other hosts retain
++the mapping above, with DOWN reporting only clicks.
+
+ ## Audio fragment envelope
+
+diff --git a/docs/ai-passport-ble-protocol.zh_CN.md b/docs/ai-passport-ble-protocol.zh_CN.md
+index 72436db..48c5d50 100644
+--- a/docs/ai-passport-ble-protocol.zh_CN.md
++++ b/docs/ai-passport-ble-protocol.zh_CN.md
+@@ -73,12 +73,21 @@ Control 值是带 `v: 1` 的完整 UTF-8 JSON 对象，最长 182 字节。设
+ PassVoice 按键策略。`DOWN` 和 `OK` 都使用 `button_event` 上报 `click` 或
+ `long`。两个按键分别使用独立的 650 ms 长按计时，紧接短按的长按也可识别。长按
+ 是当次按压的唯一事件。此模式只有单击 `UP` 能结束采集。在采集中开始或触发的
+-`DOWN` 和 `OK` 手势会被忽略。`UP` 请求停止后，新按压可立即生效。如果工作
+-任务尚未发送完 `ptt_up`，对应的 `button_event` 会包含可选的 `sessionId`，
+-用于标识已请求停止的采集。该通知可能早于 `ptt_down` 或 `ptt_up` 到达。主机
+-根据会话 ID 等待匹配的正常停止，再处理暂存的回车。早于该模式的固件会忽略可选的
+-`host` 字段。早于 `DOWN` 长按支持的固件只上报它的 `click` 事件。其它主机仍
+-使用上表的映射，`DOWN` 只上报短按。
++`DOWN` 和 `OK` 手势会被忽略。`UP` 请求停止后，新按压可立即生效。音频任务在
++成功将 `ptt_up` 放入发送队列后，才排入对应的 `button_event`。如果手势在
++`ptt_up` 发出前触发，事件带有可选的 `sessionId` 用于标识本次采集。在 UP
++请求停止后、`ptt_up` 发出前开始或触发的手势要求本次采集正常停止。采集失败、
++会话切换或连接变更时，音频任务丢弃这些手势。早期固件的带会话 ID 手势可能早于
++`ptt_down` 或 `ptt_up` 到达。主机通过会话 ID 将暂存的回车关联到对应的正常停止。
++
++编辑绑定和文字动作时机由 PassVoice 决定。设备可能在按键时显示原有的 VOICE、
++SEND 和 UNDO 提示。这些提示用于指示物理按键，不反映自定义绑定，也不确认编辑结果。
++固件在采集和正常停止时分别显示 Recording 和 Processing。主机播放完音频后恢复
++Ready，此时 Mac 上的文字可能仍在提交。PassVoice 模式下固件不会显示 DOWN 或 OK
++的编辑结果。
++
++早于 PassVoice 模式的固件会忽略可选的 `host` 字段。早于 DOWN 长按支持的固件只
++上报它的 `click` 事件。其它主机仍使用上表的映射，DOWN 只上报短按。
+
+ ## 音频分片封装
+
+diff --git a/main/button_gesture.h b/main/button_gesture.h
+index 93d1c93..3e2ac08 100644
+--- a/main/button_gesture.h
++++ b/main/button_gesture.h
+@@ -10,7 +10,7 @@ typedef enum {
+ } button_action_t;
+ typedef struct {
+     bool pressed, long_sent;
+-    uint32_t started_ms, context;
++    uint32_t started_ms, context, stopped_session_at_press;
+ } button_gesture_t;
+
+ // context identifies the host connection; zero means no ready host. The caller
+@@ -49,18 +49,31 @@ typedef struct {
+ typedef struct {
+     button_action_t action;
+     bool cancel_capture;
++    uint32_t required_stop;
+ } button_edit_t;
+
+ static inline button_edit_t button_edit_update(button_gesture_t *s, button_edge_t edge,
+         uint32_t now_ms, uint32_t long_ms, button_edit_host_t host, bool is_ok)
+ {
+     const bool blocked = host.passvoice && host.recording && host.stopped_session == 0;
++    const bool new_press = edge == BUTTON_EDGE_PRESS && !s->pressed;
+     // Zero context also invalidates a press that ends after the UP stop.
+     const button_action_t action = button_gesture_update(s, edge, now_ms,
+                                       blocked ? 0 : host.connection, long_ms);
++    if (new_press && host.passvoice) s->stopped_session_at_press = host.stopped_session;
+     if (action == BUTTON_ACTION_LONG && !is_ok && !host.passvoice) {
+         return (button_edit_t){0};
+     }
+-    return (button_edit_t){action,
+-        action != BUTTON_ACTION_NONE && !host.passvoice && host.recording && is_ok};
++    return (button_edit_t){
++        .action = action,
++        .cancel_capture = action != BUTTON_ACTION_NONE && !host.passvoice && host.recording && is_ok,
++        // A release after an abort must still wait for the stop that was pending at press.
++        .required_stop = s->stopped_session_at_press ? s->stopped_session_at_press : host.stopped_session,
++    };
++}
++
++static inline bool button_edit_can_deliver(uint32_t queued_connection, uint32_t connection,
++        uint32_t required_stop, uint32_t delivered_stop)
++{
++    return queued_connection == connection && (required_stop == 0 || required_stop == delivered_stop);
+ }
+diff --git a/main/vokie_ble.c b/main/vokie_ble.c
+index ee9bcad..c2ebae7 100644
+--- a/main/vokie_ble.c
++++ b/main/vokie_ble.c
+@@ -26,6 +26,7 @@
+ #include "esp_system.h"
+ #include "freertos/FreeRTOS.h"
+ #include "freertos/task.h"
++#include "freertos/queue.h"
+ #include "host/ble_att.h"
+ #include "host/ble_gap.h"
+ #include "host/ble_gatt.h"
+@@ -57,6 +58,7 @@ static const uint16_t NO_CONN = BLE_HS_CONN_HANDLE_NONE;
+ #define AUDIO_LINK_TIMEOUT_MS 1500
+ #define LINK_RETRY_MS 250
+ #define SLEEP_RECHECK_MS 5000
++#define BUTTON_QUEUE_LENGTH 8
+ #define SERVICE_BYTES 0x00,0x45,0x49,0x4b,0x4f,0x56,0x1a,0x9d,0x6f,0x4b,0x7b,0x6a,0x01,0x00,0x0e,0x7f
+ #define CONTROL_BYTES 0x00,0x45,0x49,0x4b,0x4f,0x56,0x1a,0x9d,0x6f,0x4b,0x7b,0x6a,0x02,0x00,0x0e,0x7f
+ #define AUDIO_BYTES 0x00,0x45,0x49,0x4b,0x4f,0x56,0x1a,0x9d,0x6f,0x4b,0x7b,0x6a,0x03,0x00,0x0e,0x7f
+@@ -75,14 +77,20 @@ static volatile bool s_control_subscribed;
+ static volatile bool s_audio_subscribed;
+ static volatile bool s_host_ready;
+ static volatile bool s_passvoice_host;
+-static volatile uint32_t s_passvoice_stop_session;
+ static volatile bool s_recording;
+ static volatile bool s_stop_requested;
+ static volatile bool s_result_pending;
+ static volatile bool s_finishing;
+ static volatile uint32_t s_session;
+ static volatile uint32_t s_control_seq;
+-static volatile uint32_t s_button_seq;
++static uint32_t s_button_seq;
++typedef struct {
++    bsp_btn_t button;
++    button_action_t action;
++    uint32_t duration_ms, seq, session, stopped_session, required_stop, epoch;
++    uint16_t conn;
++} button_notification_t;
++static QueueHandle_t s_button_queue;
+ static TaskHandle_t s_audio_task;
+ static bool s_started;
+ static button_gesture_t s_button_gestures[3];
+@@ -180,24 +188,6 @@ static const char *button_name(bsp_btn_t button)
+     }
+ }
+
+-static void send_button_event(bsp_btn_t button, const char *event,
+-                              uint32_t duration_ms, uint32_t stopped_session)
+-{
+-    if (s_conn == NO_CONN || !s_host_ready) return;
+-    char json[MAX_CONTROL + 1];
+-    char session_field[32] = "";
+-    if (stopped_session) {
+-        snprintf(session_field, sizeof(session_field), ",\"sessionId\":%lu", (unsigned long)stopped_session);
+-    }
+-    snprintf(json, sizeof(json),
+-             "{\"v\":1,\"type\":\"button_event\",\"button\":\"%s\",\"event\":\"%s\",\"durationMs\":%lu,\"seq\":%lu%s}",
+-             button_name(button), event, (unsigned long)duration_ms,
+-             (unsigned long)++s_button_seq, session_field);
+-    int rc = notify_control(json);
+-    device_diag_emit(DD_BUTTON_SEND, s_session, button, !strcmp(event, "long"), duration_ms,
+-                     rc, s_button_seq, diagnostic_flags(), s_connection_epoch, 0);
+-}
+-
+ static void button_cb(bsp_btn_t button, bsp_btn_ev_t event, void *user);
+
+ static void button_hold_expired(void *arg)
+@@ -208,20 +198,24 @@ static void button_hold_expired(void *arg)
+
+ static int access_cb(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg);
+ static int gap_event(struct ble_gap_event *event, void *arg);
+-static int notify_bytes(uint16_t handle, const uint8_t *data, size_t len)
++static int notify_bytes(uint16_t conn, uint32_t epoch, uint16_t handle, const uint8_t *data, size_t len)
+ {
+-    if (s_conn == NO_CONN) return BLE_HS_ENOTCONN;
+-    if (len > ble_att_mtu(s_conn) - 3) return BLE_HS_EMSGSIZE;
++    if (conn == NO_CONN || conn != s_conn || epoch != s_connection_epoch) return BLE_HS_ENOTCONN;
++    if (len > ble_att_mtu(conn) - 3) return BLE_HS_EMSGSIZE;
+     struct os_mbuf *om = ble_hs_mbuf_from_flat(data, len);
+     if (!om) return BLE_HS_ENOMEM;
+-    return ble_gatts_notify_custom(s_conn, handle, om);
++    if (conn != s_conn || epoch != s_connection_epoch) {
++        os_mbuf_free_chain(om);
++        return BLE_HS_ENOTCONN;
++    }
++    return ble_gatts_notify_custom(conn, handle, om);
+ }
+
+ static int notify_control(const char *json)
+ {
+     size_t len = strlen(json);
+     if (len == 0 || len > MAX_CONTROL) return BLE_HS_EMSGSIZE;
+-    int rc = notify_bytes(s_control_handle, (const uint8_t *)json, len);
++    int rc = notify_bytes(s_conn, s_connection_epoch, s_control_handle, (const uint8_t *)json, len);
+     if (rc != 0) {
+         device_diag_emit(DD_TX_FAILURE, s_session, s_control_handle, rc, 1, 0,
+                          diagnostic_flags(), s_connection_epoch, esp_get_free_heap_size(), 0);
+@@ -230,6 +224,42 @@ static int notify_control(const char *json)
+     return rc;
+ }
+
++static void send_button_notification(const button_notification_t *notification)
++{
++    char json[MAX_CONTROL + 1];
++    char session_field[32] = "";
++    if (notification->stopped_session) {
++        snprintf(session_field, sizeof(session_field), ",\"sessionId\":%lu",
++                 (unsigned long)notification->stopped_session);
++    }
++    const bool long_press = notification->action == BUTTON_ACTION_LONG;
++    const int len = snprintf(json, sizeof(json),
++             "{\"v\":1,\"type\":\"button_event\",\"button\":\"%s\",\"event\":\"%s\",\"durationMs\":%lu,\"seq\":%lu%s}",
++             button_name(notification->button), long_press ? "long" : "click",
++             (unsigned long)notification->duration_ms, (unsigned long)notification->seq, session_field);
++    int rc = BLE_HS_EMSGSIZE;
++    if (len > 0 && len <= MAX_CONTROL) {
++        rc = notify_bytes(notification->conn, notification->epoch, s_control_handle,
++                          (const uint8_t *)json, (size_t)len);
++    }
++    device_diag_emit(DD_BUTTON_SEND, notification->session, notification->button, long_press,
++                     notification->duration_ms, rc, notification->seq, diagnostic_flags(),
++                     notification->epoch, 0);
++}
++
++static void drain_button_notifications(uint32_t delivered_stop)
++{
++    button_notification_t notification;
++    for (int index = 0; index < BUTTON_QUEUE_LENGTH &&
++         xQueueReceive(s_button_queue, &notification, 0) == pdTRUE; ++index) {
++        if (!s_passvoice_host || !host_is_ready() || !s_control_subscribed ||
++            notification.conn != s_conn || notification.session != s_session ||
++            !button_edit_can_deliver(notification.epoch, s_connection_epoch,
++                                     notification.required_stop, delivered_stop)) continue;
++        send_button_notification(&notification);
++    }
++}
++
+ typedef struct {
+     uint16_t conn;
+     uint16_t handle;
+@@ -542,7 +572,6 @@ static int finish_capture(uint32_t session, uint32_t epoch, uint32_t frames, con
+                      result.cancelled, result.disconnect_requested, result.disconnect_rc,
+                      frames, epoch, diagnostic_flags());
+     if (capture_end_valid(&end)) {
+-        s_passvoice_stop_session = 0;
+         s_finishing = false;
+     }
+     return result.cancelled ? BLE_HS_ENOTCONN : result.notify_rc;
+@@ -638,6 +667,7 @@ static void audio_task(void *arg)
+     uint32_t sequence = 0;
+     uint32_t capture_session = 0;
+     uint32_t capture_epoch = 0;
++    uint32_t delivered_stop = 0;
+     uint32_t stats_ms = 0;
+     uint32_t diag_ms = 0, capture_ms = 0, last_frame_ms = 0;
+     uint32_t max_read_us = 0, max_tx_ms = 0, max_gap_ms = 0;
+@@ -650,9 +680,12 @@ static void audio_task(void *arg)
+     for (;;) {
+         if (link_epoch != s_connection_epoch) {
+             link_epoch = s_connection_epoch;
++            delivered_stop = 0;
+             idle_attempted = slowed = active_requested = false;
+         }
+         if (!s_recording) {
++            // Post-UP gestures stay in the queue until this worker has sent ptt_up.
++            drain_button_notifications(delivered_stop);
+             if (capturing && !end_logged) {
+                 device_diag_emit(DD_CAPTURE_ABORT, capture_session, s_stop_reason, sequence,
+                                  s_tx_retries, capture_epoch, s_connection_epoch, s_session,
+@@ -730,6 +763,7 @@ static void audio_task(void *arg)
+                                  s_session, diagnostic_flags(), tx_now_ms(NULL) - capture_ms);
+                 diagnostic_stats(capture_session, sequence, max_read_us, max_tx_ms, max_gap_ms);
+             }
++            delivered_stop = 0;
+             capture_session = s_session;
+             capture_epoch = s_connection_epoch;
+             sequence = 0;
+@@ -749,7 +783,6 @@ static void audio_task(void *arg)
+                     s_stop_reason = DD_REASON_TRANSPORT;
+                     s_recording = false;
+                     s_stop_requested = false;
+-                    s_passvoice_stop_session = 0;
+                     device_diag_emit(DD_CAPTURE_ABORT, capture_session, s_stop_reason, 0, 0,
+                                      capture_epoch, s_connection_epoch, s_session,
+                                      diagnostic_flags(), tx_now_ms(NULL) - capture_ms);
+@@ -894,6 +927,7 @@ static void audio_task(void *arg)
+         if (s_stop_requested) {
+             const uint32_t stop_reason = s_stop_reason;
+             int stop_rc = finish_capture(capture_session, capture_epoch, sequence, NULL);
++            if (stop_rc == 0 && stop_reason == DD_REASON_UP) delivered_stop = capture_session;
+             device_diag_emit(DD_CAPTURE_STOP, capture_session, stop_reason, sequence, s_tx_retries,
+                              stop_rc, diagnostic_flags(), capture_epoch, s_connection_epoch,
+                              tx_now_ms(NULL) - capture_ms);
+@@ -931,11 +965,18 @@ static void button_cb(bsp_btn_t button, bsp_btn_ev_t event, void *user)
+     s_last_activity_ms = now_ms;
+     taskEXIT_CRITICAL(&s_sleep_lock);
+     if (s_audio_task) xTaskNotifyGive(s_audio_task);
+-    const uint32_t context = host_is_ready() ? s_connection_epoch : 0;
++    const uint32_t epoch = s_connection_epoch;
++    const uint16_t conn = s_conn;
++    const bool passvoice = s_passvoice_host;
++    const uint32_t session = s_session;
++    const bool recording = s_recording;
++    const bool finishing = s_finishing;
++    const bool stopped_by_up = (s_stop_requested || finishing) && s_stop_reason == DD_REASON_UP;
++    const uint32_t context = host_is_ready() && epoch == s_connection_epoch ? epoch : 0;
+     button_gesture_t *gesture = &s_button_gestures[button];
+     const button_edit_host_t edit_host = {
+-        .connection = context, .stopped_session = s_passvoice_stop_session,
+-        .passvoice = s_passvoice_host, .recording = s_recording,
++        .connection = context, .stopped_session = stopped_by_up ? session : 0,
++        .passvoice = passvoice, .recording = recording || (passvoice && finishing),
+     };
+     const button_edit_t edit = button == BSP_BTN_UP ? (button_edit_t){
+         .action = button_gesture_update(gesture, edge, now_ms, context, BUTTON_LONG_PRESS_MS),
+@@ -976,7 +1017,6 @@ static void button_cb(bsp_btn_t button, bsp_btn_ev_t event, void *user)
+             }
+             s_session = esp_random();
+             if (s_session == 0) s_session = 1;
+-            s_passvoice_stop_session = 0;
+             s_control_seq = 0;
+             s_queued_frames = 0;
+             s_stop_requested = false;
+@@ -990,23 +1030,29 @@ static void button_cb(bsp_btn_t button, bsp_btn_ev_t event, void *user)
+             s_stop_reason = DD_REASON_UP;
+             device_diag_emit(DD_STOP_REQUEST, s_session, s_stop_reason, s_queued_frames,
+                              diagnostic_flags(), s_connection_epoch, duration_ms, 0, 0, 0);
+-            if (s_passvoice_host && !s_stop_requested) s_passvoice_stop_session = s_session;
+             s_stop_requested = true;
+             ui_status_set_state(UI_STATUS_PROCESSING, "Processing");
+         }
+         return;
+     }
++    const button_notification_t notification = {
++        .button = button, .action = action,
++        .duration_ms = button == BSP_BTN_DOWN && action == BUTTON_ACTION_CLICK ? 0 : duration_ms,
++        .seq = ++s_button_seq, .session = session, .epoch = epoch, .conn = conn,
++        .stopped_session = edit_host.passvoice ? edit_host.stopped_session : 0,
++        .required_stop = edit.required_stop,
++    };
+     if (edit_host.passvoice) {
+-        // The host owns bindings and text-commit timing. Only UP may stop capture.
+-        const bool long_press = action == BUTTON_ACTION_LONG;
+-        send_button_event(button, long_press ? "long" : "click",
+-                          button == BSP_BTN_DOWN && !long_press ? 0 : duration_ms,
+-                          edit_host.stopped_session);
++        // The host owns bindings and text commit timing. The timer callback never
++        // enters NimBLE. Wake the worker after publishing to avoid a lost wakeup.
++        if (xQueueSend(s_button_queue, &notification, 0) == pdTRUE && s_audio_task) {
++            xTaskNotifyGive(s_audio_task);
++        }
+         return;
+     }
+     if (button == BSP_BTN_DOWN && action == BUTTON_ACTION_CLICK) {
+         if (!host_is_ready()) return;
+-        send_button_event(button, "click", 0, 0);
++        send_button_notification(&notification);
+         ui_status_set_state(UI_STATUS_READY, "Send message");
+         return;
+     }
+@@ -1021,10 +1067,10 @@ static void button_cb(bsp_btn_t button, bsp_btn_ev_t event, void *user)
+                 device_diag_emit(DD_STOP_REQUEST, s_session, s_stop_reason, s_queued_frames,
+                                  diagnostic_flags(), s_connection_epoch, duration_ms, 0, 0, 0);
+                 s_stop_requested = true;
+-                send_button_event(button, "long", duration_ms, 0);
++                send_button_notification(&notification);
+                 ui_status_set_state(UI_STATUS_PROCESSING, "Cancelling");
+             } else {
+-                send_button_event(button, "long", duration_ms, 0);
++                send_button_notification(&notification);
+                 ui_status_set_state(UI_STATUS_READY, "Clear input");
+             }
+         } else if (action == BUTTON_ACTION_CLICK) {
+@@ -1033,10 +1079,10 @@ static void button_cb(bsp_btn_t button, bsp_btn_ev_t event, void *user)
+                 device_diag_emit(DD_STOP_REQUEST, s_session, s_stop_reason, s_queued_frames,
+                                  diagnostic_flags(), s_connection_epoch, duration_ms, 0, 0, 0);
+                 s_stop_requested = true;
+-                send_button_event(button, "click", duration_ms, 0);
++                send_button_notification(&notification);
+                 ui_status_set_state(UI_STATUS_PROCESSING, "Cancelling");
+             } else {
+-                send_button_event(button, "click", duration_ms, 0);
++                send_button_notification(&notification);
+                 ui_status_set_state(UI_STATUS_READY, "Delete character");
+             }
+         }
+@@ -1129,7 +1175,6 @@ static int access_cb(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *
+                          (unsigned long)s_session, s_recording);
+                 s_recording = false;
+                 s_stop_requested = false;
+-                s_passvoice_stop_session = 0;
+                 ui_status_set_state(UI_STATUS_ERROR, "Try again");
+             }
+             if (s_audio_task && state_id != 0) xTaskNotifyGive(s_audio_task);
+@@ -1196,7 +1241,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
+             ++s_connection_epoch;
+             s_conn = event->connect.conn_handle;
+             s_host_ready = false; s_control_subscribed = false; s_audio_subscribed = false;
+-            s_passvoice_host = false; s_passvoice_stop_session = 0;
++            s_passvoice_host = false;
+             s_result_pending = false; s_finishing = false;
+             s_hello_sent = false;
+             log_link("Connected");
+@@ -1215,7 +1260,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
+         if (voice_busy()) note_activity();
+         ++s_connection_epoch;
+         s_recording = false; s_stop_requested = false; s_host_ready = false;
+-        s_passvoice_host = false; s_passvoice_stop_session = 0;
++        s_passvoice_host = false;
+         s_result_pending = false; s_finishing = false;
+         s_control_subscribed = false; s_audio_subscribed = false; s_conn = NO_CONN;
+         s_hello_sent = false;
+@@ -1292,6 +1337,10 @@ esp_err_t vokie_ble_start(void)
+         err = esp_timer_create(&timer, &s_button_hold_timers[button]);
+         if (err != ESP_OK) return err;
+     }
++    if (!s_button_queue) {
++        s_button_queue = xQueueCreate(BUTTON_QUEUE_LENGTH, sizeof(button_notification_t));
++        if (!s_button_queue) return ESP_ERR_NO_MEM;
++    }
+     if (bsp_button_init(button_cb, NULL) != ESP_OK) return ESP_FAIL;
+     int rc = nimble_port_init(); if (rc != ESP_OK) return ESP_FAIL;
+     ble_svc_gap_init(); ble_svc_gatt_init(); ble_svc_gap_device_name_set(DEVICE_NAME);
+diff --git a/tests/test_button_gesture.c b/tests/test_button_gesture.c
+index d6c745f..402e4a7 100644
+--- a/tests/test_button_gesture.c
++++ b/tests/test_button_gesture.c
+@@ -78,6 +78,25 @@ static void test_legacy_hosts_keep_capture_button_actions(void) {
+     assert(cancel.action == BUTTON_ACTION_CLICK && cancel.cancel_capture);
+ }
+
++static void test_passvoice_post_stop_gesture_requires_its_normal_stop(void) {
++    assert(button_edit_can_deliver(1, 1, 42, 42));
++    assert(!button_edit_can_deliver(1, 1, 42, 0)); // Capture failed to stop normally.
++    assert(!button_edit_can_deliver(1, 1, 42, 43));
++    assert(!button_edit_can_deliver(1, 2, 42, 42)); // Connection changed.
++    assert(button_edit_can_deliver(1, 1, 0, 0));  // Ordinary idle gesture.
++
++    button_gesture_t gesture = {0};
++    const button_edit_host_t stopping = {.connection = 1, .passvoice = true, .recording = true,
++                                          .stopped_session = 42};
++    const button_edit_host_t idle = {.connection = 1, .passvoice = true};
++    (void)button_edit_update(&gesture, BUTTON_EDGE_PRESS, 0, 650, stopping, false);
++    const button_edit_t after_stop = button_edit_update(&gesture, BUTTON_EDGE_RELEASE, 60,
++                                                        650, idle, false);
++    assert(after_stop.action == BUTTON_ACTION_CLICK);
++    assert(button_edit_can_deliver(1, 1, after_stop.required_stop, 42));
++    assert(!button_edit_can_deliver(1, 1, after_stop.required_stop, 0));
++}
++
+ static void test_legacy_hosts_receive_only_down_click(void) {
+     const button_edit_host_t legacy = {.connection = 1};
+     button_gesture_t down = {0};
+@@ -95,6 +114,7 @@ int main(void) {
+     test_passvoice_reports_one_click_or_hold_per_edit_press();
+     test_passvoice_ignores_edit_presses_during_capture();
+     test_passvoice_only_accepts_a_fresh_press_after_up();
++    test_passvoice_post_stop_gesture_requires_its_normal_stop();
+     test_legacy_hosts_keep_capture_button_actions();
+     test_legacy_hosts_receive_only_down_click();
+     assert(edge(BUTTON_EDGE_RELEASE, 0, 1) == BUTTON_ACTION_NONE);

@@ -1,6 +1,304 @@
 import Foundation
 
 struct PassportBridgeTests {
+    func testDownClickSendsOneReturnWhileIdle() {
+        let harness = Harness()
+        harness.connect()
+        harness.downClick()
+        expectEqual(harness.keys, [.returnKey])
+    }
+
+    func testDownDuringRecordingIsIgnoredAndQueuedReturnsWaitForVoiceText() {
+        let harness = Harness()
+        harness.connect()
+        harness.control(["type": "ptt_down", "sessionId": 1])
+        harness.downClick()
+        expectEqual(harness.keys, [])
+        harness.frame(session: 1, sequence: 0, sample: 12)
+        harness.control(["type": "ptt_up", "sessionId": 1, "finalSequence": 1])
+        harness.downClick()
+        harness.downClick()
+        expectEqual(harness.keys, [])
+
+        harness.frame(session: 1, sequence: 1, sample: 22)
+        expectEqual(harness.keys, [])
+        harness.outputs[0].completeDrain()
+        harness.bridge.tick(now: harness.now + .milliseconds(100))
+        expectEqual(harness.keys, [])
+
+        harness.input.text = "A你好Z"
+        harness.input.selection = NSRange(location: 3, length: 0)
+        harness.bridge.tick(now: harness.now + .milliseconds(200))
+        harness.bridge.tick(now: harness.now + .milliseconds(300))
+        expectEqual(harness.keys, [.returnKey])
+    }
+
+    func testQueuedReturnIsDroppedIfInputChangesBeforeUpStopsRecording() {
+        let harness = Harness()
+        harness.connect()
+        harness.control(["type": "ptt_down", "sessionId": 1])
+        harness.frame(session: 1, sequence: 0, sample: 12)
+        harness.input.text = "A异Z"
+        harness.control(["type": "ptt_up", "sessionId": 1, "finalSequence": 0])
+        harness.downClick()
+        harness.input.text = "A🙂Z"
+        harness.outputs[0].completeDrain()
+        harness.input.text = "A你好Z"
+        harness.input.selection = NSRange(location: 3, length: 0)
+        harness.bridge.tick(now: harness.now + .milliseconds(100))
+        expectEqual(harness.keys, [])
+    }
+
+    func testQueuedReturnIsDroppedAfterLosingAndRegainingFocus() {
+        let harness = Harness()
+        harness.stopVoiceSessionWithQueuedReturn()
+        harness.input.hasFocus = false
+        harness.bridge.tick(now: harness.now + .milliseconds(100))
+
+        harness.input.hasFocus = true
+        harness.input.receiveVoiceText()
+        harness.bridge.tick(now: harness.now + .milliseconds(200))
+        expectEqual(harness.keys, [])
+    }
+
+    func testQueuedReturnIsDroppedWhenAnotherInputCouldHaveInsertedTheText() {
+        let harness = Harness()
+        harness.stopVoiceSessionWithQueuedReturn()
+        harness.input.canConfirmVoiceText = false
+        harness.input.receiveVoiceText()
+        harness.bridge.tick(now: harness.now + .milliseconds(100))
+        expectEqual(harness.keys, [])
+    }
+
+    func testQueuedReturnExpiresBeforeALateCommitAndNewPressWorks() {
+        let harness = Harness()
+        harness.stopVoiceSessionWithQueuedReturn()
+        harness.input.receiveVoiceText()
+        harness.bridge.tick(now: harness.now + .seconds(5))
+        expectEqual(harness.keys, [])
+
+        harness.downClick()
+        expectEqual(harness.keys, [.returnKey])
+    }
+
+    func testOKLongDeletesLiveVoiceTextOnlyAfterCompositionIsConfirmedClear() {
+        let harness = Harness()
+        harness.startVoiceCapture()
+        harness.input.text = "A说🙂"
+        harness.input.selection = NSRange(location: 4, length: 0)
+        harness.input.composition = .composing
+        harness.finishVoiceCapture()
+        harness.bridge.tick(now: harness.now + .milliseconds(100))
+        harness.okLong()
+        expectEqual(harness.input.text, "A说🙂")
+
+        harness.input.composition = .clear
+        harness.bridge.tick(now: harness.now + .milliseconds(200))
+        harness.input.type("A说🙂C", caret: 5, keystrokes: 1)
+        harness.okLong()
+        expectEqual(harness.input.text, "AC")
+    }
+
+    func testLiveVoiceTextIsNotCommittedWhenCompositionCannotBeRead() {
+        let harness = Harness()
+        harness.startVoiceCapture()
+        harness.input.text = "AB"
+        harness.input.selection = NSRange(location: 2, length: 0)
+        harness.finishVoiceCapture()
+        harness.downClick()
+        harness.bridge.tick(now: harness.now + .milliseconds(100))
+        harness.okLong()
+        expectEqual(harness.keys, [])
+        expectEqual(harness.input.text, "AB")
+        harness.bridge.tick(now: harness.now + .seconds(5))
+        harness.okLong()
+        expectEqual(harness.keys, [])
+        expectEqual(harness.input.text, "AB")
+    }
+
+    func testQueuedReturnWaitsForLiveVoiceCompositionToClear() {
+        let harness = Harness()
+        harness.startVoiceCapture()
+        harness.input.text = "AB"
+        harness.input.selection = NSRange(location: 2, length: 0)
+        harness.input.composition = .composing
+        harness.finishVoiceCapture()
+        harness.downClick()
+        harness.bridge.tick(now: harness.now + .milliseconds(100))
+        expectEqual(harness.keys, [])
+        harness.input.composition = .clear
+        harness.bridge.tick(now: harness.now + .milliseconds(200))
+        expectEqual(harness.keys, [.returnKey])
+        harness.okLong()
+        expectEqual(harness.input.text, "A")
+    }
+
+    func testQueuedReturnAndDeletionWaitForCompositionObservedAfterStopToClear() {
+        let harness = Harness()
+        harness.startVoiceCapture()
+        harness.finishVoiceCapture()
+        harness.downClick()
+        harness.input.text = "AB"
+        harness.input.selection = NSRange(location: 2, length: 0)
+        harness.input.composition = .composing
+        harness.bridge.tick(now: harness.now + .milliseconds(100))
+        expectEqual(harness.keys, [])
+        harness.okLong()
+        expectEqual(harness.input.text, "AB")
+
+        harness.input.composition = .unknown
+        harness.bridge.tick(now: harness.now + .milliseconds(200))
+        expectEqual(harness.keys, [])
+        harness.okLong()
+        expectEqual(harness.input.text, "AB")
+
+        harness.input.composition = .clear
+        harness.bridge.tick(now: harness.now + .milliseconds(300))
+        expectEqual(harness.keys, [.returnKey])
+        harness.okLong()
+        expectEqual(harness.input.text, "A")
+    }
+
+    func testOKLongDeletesCommittedVoiceTextAndKeepsLaterTyping() {
+        let harness = Harness()
+        harness.startVoiceCapture()
+        harness.finishVoiceCapture()
+        harness.commitVoiceText("A说🙂", caret: 4)
+        harness.input.setText("A说🙂C", caret: 5)
+        harness.input.canConfirmVoiceText = false
+        harness.okLong()
+        expectEqual(harness.input.text, "AC")
+    }
+
+    func testOKLongKeepsTypingInsertedBeforeTheCommittedRange() {
+        let harness = Harness()
+        harness.startVoiceCapture()
+        harness.finishVoiceCapture()
+        harness.commitVoiceText("AB", caret: 2)
+        harness.input.setText("ACB", caret: 2)
+        harness.okLong()
+        expectEqual(harness.input.text, "AC")
+    }
+
+    func testOKLongSkipsWhenRepeatedTextMakesTheRangeAmbiguous() {
+        let harness = Harness()
+        harness.startVoiceCapture()
+        harness.finishVoiceCapture()
+        harness.commitVoiceText("AB", caret: 2)
+        harness.input.setText("ABB", caret: 3)
+        harness.okLong()
+        expectEqual(harness.input.text, "ABB")
+    }
+
+    func testOKLongSkipsWhenTheVoiceTextMayHaveAlreadyBeenRemoved() {
+        let harness = Harness()
+        harness.startVoiceCapture(text: "B")
+        harness.finishVoiceCapture()
+        harness.commitVoiceText("BB", caret: 2)
+        harness.input.setText("B", caret: 1)
+        harness.okLong()
+        expectEqual(harness.input.text, "B")
+    }
+
+    func testOKLongSkipsTheNewlyFocusedInput() {
+        let harness = Harness()
+        harness.startVoiceCapture()
+        harness.finishVoiceCapture()
+        harness.commitVoiceText("AB", caret: 2)
+        let original = harness.input
+        original.hasFocus = false
+        harness.input = VoiceTarget(sendKey: { _ in })
+        harness.input.setText("AB", caret: 2)
+        harness.okLong()
+        expectEqual(original.text, "AB")
+        expectEqual(harness.input.text, "AB")
+    }
+
+    func testOKLongSkipsWhenTheSelectionCannotBeRead() {
+        let harness = Harness()
+        harness.startVoiceCapture()
+        harness.finishVoiceCapture()
+        harness.commitVoiceText("AB", caret: 2)
+        harness.input.selection = NSRange(location: NSNotFound, length: 0)
+        harness.okLong()
+        expectEqual(harness.input.text, "AB")
+    }
+
+    func testOKLongDoesNotDeleteVoiceTextAgainAfterTheFirstDeletion() {
+        let harness = Harness()
+        harness.startVoiceCapture()
+        harness.finishVoiceCapture()
+        harness.commitVoiceText("AB", caret: 2)
+        harness.okLong()
+        expectEqual(harness.input.text, "A")
+
+        harness.input.setText("AB", caret: 2)
+        harness.okLong()
+        expectEqual(harness.input.text, "AB")
+    }
+
+    func testOKLongKeepsTextRetypedAfterRemovingTheCommittedRange() {
+        let harness = Harness()
+        harness.startVoiceCapture()
+        harness.finishVoiceCapture()
+        harness.commitVoiceText("AB", caret: 2)
+        harness.input.setText("A", caret: 1)
+        harness.bridge.tick(now: harness.now + .milliseconds(200))
+        harness.input.setText("AB", caret: 2)
+        harness.okLong()
+        expectEqual(harness.input.text, "AB")
+    }
+
+    func testOKLongKeepsAnIdenticalReplacement() {
+        let harness = Harness()
+        harness.startVoiceCapture()
+        harness.finishVoiceCapture()
+        harness.commitVoiceText("AB", caret: 2)
+        harness.input.setText("AB", caret: 2)
+        harness.okLong()
+        expectEqual(harness.input.text, "AB")
+    }
+
+    func testOKLongRequiresEvidenceOfTheEditsBetweenSnapshots() {
+        let harness = Harness()
+        harness.startVoiceCapture()
+        harness.finishVoiceCapture()
+        harness.commitVoiceText("AB", caret: 2)
+        harness.input.noteInput()
+        harness.input.setText("ABC", caret: 3)
+        harness.okLong()
+        expectEqual(harness.input.text, "ABC")
+    }
+
+    func testOKLongKeepsTypingReportedInOneInsertion() {
+        let harness = Harness()
+        harness.startVoiceCapture()
+        harness.finishVoiceCapture()
+        harness.commitVoiceText("AB", caret: 2)
+        harness.input.type("ABCD", caret: 4, keystrokes: 2)
+        harness.okLong()
+        expectEqual(harness.input.text, "ACD")
+    }
+
+    func testOKLongDuringRecordingAndCommitWaitDoesNotQueueDeletion() {
+        let harness = Harness()
+        harness.startVoiceCapture()
+        harness.okLong()
+        harness.finishVoiceCapture()
+        harness.okLong()
+        harness.commitVoiceText("AB", caret: 2)
+        expectEqual(harness.input.text, "AB")
+    }
+
+    func testOKLongCanDeleteTheCommitAlsoUsedForQueuedReturn() {
+        let harness = Harness()
+        harness.stopVoiceSessionWithQueuedReturn()
+        harness.commitVoiceText("A你好Z", caret: 3)
+        expectEqual(harness.keys, [.returnKey])
+        harness.okLong()
+        expectEqual(harness.input.text, "AZ")
+    }
+
     func testFinishWaitsForInclusiveTailAndBlackHoleDrainBeforeAllowingAnotherSession() {
         let harness = Harness()
         harness.event("connected")
@@ -9,6 +307,7 @@ struct PassportBridgeTests {
         harness.event("subscribed")
         harness.control(Self.hello)
         expectEqual(harness.commands, ["host_ready"])
+        expectEqual(harness.handshakeHost, "passvoice")
         expectEqual(harness.statuses, [.handshaking])
         harness.control(["type": "ptt_down", "sessionId": 1])
         expectEqual(harness.outputs.count, 0)
@@ -114,10 +413,14 @@ struct PassportBridgeTests {
     ]
 
     private final class Harness {
-        let now = DispatchTime.now()
+        var now = DispatchTime.now()
+        private let resolveAction: (PassportGesture) -> PassportAction
         private(set) var commands: [String] = []
+        private(set) var handshakeHost: String?
         private(set) var outputs: [Playback] = []
         private(set) var taps = 0
+        private(set) var keys: [PassportKeystroke] = []
+        lazy var input = VoiceTarget(sendKey: { [unowned self] key in keys.append(key) })
         private(set) var statuses: [PassportStatus] = []
         lazy var bridge = PassportBridge(
             makePlayback: { [unowned self] _ in
@@ -126,17 +429,65 @@ struct PassportBridgeTests {
                 return output
             },
             tapVoiceKey: { [unowned self] in taps += 1 },
-            send: { [unowned self] command in commands.append(command.state ?? command.type) },
+            resolveAction: resolveAction,
+            sendKey: { [unowned self] key in keys.append(key) },
+            observeVoiceTarget: { [unowned self] in input },
+            send: { [unowned self] command in
+                commands.append(command.state ?? command.type)
+                if command.type == "host_ready" { handshakeHost = command.host }
+            },
             log: { _ in },
             statusChanged: { [unowned self] status in statuses.append(status) },
             leadTime: .nanoseconds(0)
         )
+
+        init(resolveAction: @escaping (PassportGesture) -> PassportAction = PassportAction.defaultAction) {
+            self.resolveAction = resolveAction
+        }
 
         func connect() {
             event("connected")
             event("subscribed")
             control(PassportBridgeTests.hello)
             event("host_ready_ack")
+        }
+
+        func downClick() {
+            control(["type": "button_event", "button": "down", "event": "click", "durationMs": 0, "seq": 2])
+        }
+
+        func downLong() {
+            control(["type": "button_event", "button": "down", "event": "long", "durationMs": 650])
+        }
+
+        func stopVoiceSessionWithQueuedReturn() {
+            connect()
+            control(["type": "ptt_down", "sessionId": 1])
+            frame(session: 1, sequence: 0, sample: 12)
+            control(["type": "ptt_up", "sessionId": 1, "finalSequence": 0])
+            downClick()
+            outputs[0].completeDrain()
+        }
+
+        func okLong() {
+            control(["type": "button_event", "button": "ok", "event": "long"])
+        }
+
+        func startVoiceCapture(text: String = "A") {
+            connect()
+            input.setText(text, caret: text.utf16.count)
+            control(["type": "ptt_down", "sessionId": 1])
+            frame(session: 1, sequence: 0, sample: 12)
+        }
+
+        func finishVoiceCapture() {
+            control(["type": "ptt_up", "sessionId": 1, "finalSequence": 0])
+            outputs[0].completeDrain()
+        }
+
+        func commitVoiceText(_ text: String, caret: Int) {
+            input.setText(text, caret: caret)
+            bridge.tick(now: now + .milliseconds(100))
         }
 
         func control(_ fields: [String: Any]) {
@@ -164,6 +515,66 @@ struct PassportBridgeTests {
         }
     }
 
+    private final class VoiceTarget: PassportVoiceTarget {
+        var text = "A🙂Z"
+        var selection = NSRange(location: 1, length: 2)
+        var canConfirmVoiceText = true
+        var composition: PassportTextComposition = .unknown
+        var hasFocus = true
+        var isFocused: Bool { hasFocus }
+        let sendKey: (PassportKeystroke) -> Void
+        private var onEdit: ((PassportEditObservation) -> Void)?
+
+        init(sendKey: @escaping (PassportKeystroke) -> Void) { self.sendKey = sendKey }
+
+        func receiveVoiceText() {
+            text = "A你好Z"
+            selection = NSRange(location: 3, length: 0)
+        }
+
+        func snapshot() -> PassportTextState? {
+            hasFocus ? PassportTextState(text: text, selectedRange: selection, composition: composition) : nil
+        }
+
+        func stopMonitoringInput() {}
+
+        func monitorEdits(
+            ifSnapshotIs expected: PassportTextState, onEdit: @escaping (PassportEditObservation) -> Void
+        ) -> Bool {
+            guard snapshot() == expected else { return false }
+            self.onEdit = onEdit
+            return true
+        }
+
+        func setText(_ text: String, caret: Int) {
+            noteInput()
+            updateValue(text, caret: caret)
+        }
+
+        func type(_ text: String, caret: Int, keystrokes: Int) {
+            for _ in 0..<keystrokes { onEdit?(.typing) }
+            updateValue(text, caret: caret)
+        }
+
+        private func updateValue(_ text: String, caret: Int) {
+            self.text = text
+            selection = NSRange(location: caret, length: 0)
+            if let state = snapshot() { onEdit?(.value(state)) }
+        }
+
+        func noteInput() { onEdit?(.input) }
+
+        func delete(_ range: NSRange, ifSnapshotIs expected: PassportTextState) {
+            guard snapshot() == expected, let indices = Range(range, in: text) else { return }
+            text.removeSubrange(indices)
+            selection = NSRange(location: range.location, length: 0)
+        }
+
+        func send(_ key: PassportKeystroke, ifSnapshotIs expected: PassportTextState) {
+            if canConfirmVoiceText, snapshot() == expected { sendKey(key) }
+        }
+    }
+
     private final class Playback: AudioPlayback {
         var samples: [Int16] = []
         var completion: (() -> Void)?
@@ -179,6 +590,197 @@ struct PassportBridgeTests {
             completion = nil
             callback?()
         }
+    }
+}
+
+extension PassportBridgeTests {
+    func testChangingEachBindingTakesEffectOnTheCurrentBridge() {
+        let suite = "PassVoiceTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let bindings = PassportButtonBindings(defaults: defaults)
+        let harness = Harness(resolveAction: bindings.action(for:))
+        harness.connect()
+
+        let shiftReturn = PassportKeystroke(keyCode: 36, modifiers: [.shift])
+        bindings.set(.backspace, for: .downClick)
+        bindings.set(.shortcut(shiftReturn, keyName: "↩"), for: .downLong)
+        bindings.set(.none, for: .okClick)
+        bindings.set(.returnKey, for: .okLong)
+        harness.downClick()
+        harness.downLong()
+        harness.control(["type": "button_event", "button": "ok", "event": "click"])
+        harness.okLong()
+        expectEqual(harness.keys, [.backspace, shiftReturn, .returnKey])
+    }
+
+    func testSavedShortcutSendsItsKeyAndModifiersAfterReloadingBindings() {
+        let suite = "PassVoiceTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let bindings = PassportButtonBindings(defaults: defaults)
+        bindings.set(.shortcut(PassportKeystroke(keyCode: 36, modifiers: [.shift]), keyName: "↩"), for: .downLong)
+
+        let reloaded = PassportButtonBindings(defaults: UserDefaults(suiteName: suite)!)
+        let harness = Harness(resolveAction: reloaded.action(for:))
+        harness.connect()
+        harness.downLong()
+        expectEqual(harness.keys.map(\.keyCode), [36])
+        expectEqual(harness.keys.map(\.modifiers), [.shift])
+    }
+
+    func testRestoringDefaultsClearsAllSavedBindings() {
+        let suite = "PassVoiceTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let bindings = PassportButtonBindings(defaults: defaults)
+        bindings.set(.none, for: .downClick)
+        bindings.set(.returnKey, for: .downLong)
+        bindings.set(.none, for: .okClick)
+        bindings.set(.none, for: .okLong)
+        let reloaded = PassportButtonBindings(defaults: UserDefaults(suiteName: suite)!)
+        let harness = Harness(resolveAction: reloaded.action(for:))
+        harness.startVoiceCapture()
+        harness.finishVoiceCapture()
+        harness.commitVoiceText("AB", caret: 2)
+
+        bindings.restoreDefaults()
+        harness.downClick()
+        harness.downLong()
+        harness.control(["type": "button_event", "button": "ok", "event": "click"])
+        harness.okLong()
+        expectEqual(harness.keys, [.returnKey, .backspace])
+        expectEqual(harness.input.text, "A")
+    }
+
+    func testDownLongDoesNotSendOrQueueItsBindingDuringCapture() {
+        let harness = Harness(resolveAction: { gesture in
+            gesture == .downLong ? .returnKey : PassportAction.defaultAction(for: gesture)
+        })
+        harness.startVoiceCapture()
+        harness.downLong()
+        expectEqual(harness.keys, [])
+
+        harness.finishVoiceCapture()
+        harness.commitVoiceText("AB", caret: 2)
+        expectEqual(harness.keys, [])
+
+        harness.downLong()
+        expectEqual(harness.keys, [.returnKey])
+    }
+
+    func testCustomReturnIsIgnoredWhileRecordingAndNeverDeferred() {
+        let harness = Harness(resolveAction: { _ in .shortcut(.returnKey, keyName: "↩") })
+        harness.startVoiceCapture()
+        harness.downClick()
+        harness.control(["type": "button_event", "button": "down", "event": "click", "sessionId": 1])
+        harness.finishVoiceCapture()
+        harness.downClick()
+        harness.commitVoiceText("AB", caret: 2)
+        expectEqual(harness.keys, [])
+
+        harness.downClick()
+        expectEqual(harness.keys, [.returnKey])
+    }
+
+    func testOkClickSendsOneBackspaceWhileIdle() {
+        let harness = Harness()
+        harness.connect()
+        harness.control(["type": "button_event", "button": "ok", "event": "click"])
+        expectEqual(harness.keys.map(\.keyCode), [51]) // macOS Delete (Backspace)
+    }
+
+    func testOkClickDoesNotRunDuringRecordingOrWaitForVoiceText() {
+        let harness = Harness()
+        harness.connect()
+        let okClick = ["type": "button_event", "button": "ok", "event": "click"]
+        harness.control(["type": "ptt_down", "sessionId": 1])
+        harness.control(okClick)
+        harness.frame(session: 1, sequence: 0, sample: 12)
+        harness.control(["type": "ptt_up", "sessionId": 1, "finalSequence": 0])
+        harness.outputs[0].completeDrain()
+        harness.control(okClick)
+        harness.input.text = "A你好Z"
+        harness.input.selection = NSRange(location: 3, length: 0)
+        harness.bridge.tick(now: harness.now + .milliseconds(100))
+        expectEqual(harness.keys, [])
+    }
+
+    func testReturnPressedJustAfterUpWaitsForTheDelayedPttUpAndVoiceText() {
+        let harness = Harness()
+        harness.connect()
+        let pressedAfterUp: [String: Any] = [
+            "type": "button_event", "button": "down", "event": "click", "sessionId": 1,
+        ]
+        harness.control(pressedAfterUp)
+        expectEqual(harness.keys, [])
+        harness.control(["type": "ptt_down", "sessionId": 1])
+        harness.frame(session: 1, sequence: 0, sample: 12)
+        harness.control(pressedAfterUp)
+        harness.control(["type": "ptt_up", "sessionId": 1, "finalSequence": 0])
+        harness.outputs[0].completeDrain()
+        expectEqual(harness.keys, [])
+
+        harness.input.text = "A你好Z"
+        harness.input.selection = NSRange(location: 3, length: 0)
+        harness.bridge.tick(now: harness.now + .milliseconds(100))
+        expectEqual(harness.keys, [.returnKey])
+    }
+
+    func testTaggedReturnDoesNotFollowAnAbortedOrDifferentSession() {
+        for abort in [false, true] {
+            let harness = Harness()
+            harness.connect()
+            harness.control(["type": "button_event", "button": "down", "event": "click", "sessionId": 1])
+            if abort { harness.control(["type": "device_error", "sessionId": 1]) }
+            let session: UInt32 = abort ? 1 : 2
+            harness.control(["type": "ptt_down", "sessionId": session])
+            harness.frame(session: session, sequence: 0, sample: 12)
+            harness.control(["type": "ptt_up", "sessionId": session, "finalSequence": 0])
+            harness.outputs[0].completeDrain()
+            harness.input.text = "A你好Z"
+            harness.input.selection = NSRange(location: 3, length: 0)
+            harness.bridge.tick(now: harness.now + .milliseconds(100))
+            expectEqual(harness.keys, [])
+        }
+    }
+
+    func testTaggedReturnBeforePttDownDoesNotFollowTheNewFocus() {
+        let harness = Harness()
+        harness.connect()
+        harness.control(["type": "button_event", "button": "down", "event": "click", "sessionId": 1])
+        harness.input.hasFocus = false
+        harness.input = VoiceTarget(sendKey: { _ in preconditionFailure("Unexpected Return to the new field") })
+        harness.control(["type": "ptt_down", "sessionId": 1])
+        harness.frame(session: 1, sequence: 0, sample: 12)
+        harness.finishVoiceCapture()
+        harness.commitVoiceText("A你好Z", caret: 3)
+
+        expectEqual(harness.taps, 2)
+        expectEqual(harness.keys, [])
+    }
+
+    func testLateTextFromPriorSessionDoesNotConfirmASecondSession(afterTimeout: Bool) {
+        let harness = Harness()
+        harness.startVoiceCapture()
+        harness.finishVoiceCapture()
+        if afterTimeout {
+            harness.now = harness.now + .seconds(5)
+            harness.bridge.tick(now: harness.now)
+        }
+
+        harness.control(["type": "ptt_down", "sessionId": 2])
+        harness.frame(session: 2, sequence: 0, sample: 12)
+        harness.control(["type": "ptt_up", "sessionId": 2, "finalSequence": 0])
+        harness.downClick()
+        harness.outputs[1].completeDrain()
+        harness.commitVoiceText("AB", caret: 2) // Only the first session's result has landed.
+        harness.bridge.tick(now: harness.now + .seconds(5))
+        harness.okLong()
+
+        expectEqual(harness.taps, 4)
+        expectEqual(harness.keys, [])
+        expectEqual(harness.input.text, "AB")
     }
 }
 
@@ -199,8 +801,43 @@ private func expectTrue(_ actual: Bool, line: UInt = #line) {
 }
 
 let tests = PassportBridgeTests()
+tests.testDownClickSendsOneReturnWhileIdle()
+tests.testDownDuringRecordingIsIgnoredAndQueuedReturnsWaitForVoiceText()
+tests.testQueuedReturnIsDroppedIfInputChangesBeforeUpStopsRecording()
+tests.testQueuedReturnIsDroppedAfterLosingAndRegainingFocus()
+tests.testQueuedReturnIsDroppedWhenAnotherInputCouldHaveInsertedTheText()
+tests.testQueuedReturnExpiresBeforeALateCommitAndNewPressWorks()
+tests.testOKLongDeletesLiveVoiceTextOnlyAfterCompositionIsConfirmedClear()
+tests.testLiveVoiceTextIsNotCommittedWhenCompositionCannotBeRead()
+tests.testQueuedReturnWaitsForLiveVoiceCompositionToClear()
+tests.testQueuedReturnAndDeletionWaitForCompositionObservedAfterStopToClear()
+tests.testOKLongDeletesCommittedVoiceTextAndKeepsLaterTyping()
+tests.testOKLongKeepsTypingInsertedBeforeTheCommittedRange()
+tests.testOKLongSkipsWhenRepeatedTextMakesTheRangeAmbiguous()
+tests.testOKLongSkipsWhenTheVoiceTextMayHaveAlreadyBeenRemoved()
+tests.testOKLongSkipsTheNewlyFocusedInput()
+tests.testOKLongSkipsWhenTheSelectionCannotBeRead()
+tests.testOKLongDoesNotDeleteVoiceTextAgainAfterTheFirstDeletion()
+tests.testOKLongKeepsTextRetypedAfterRemovingTheCommittedRange()
+tests.testOKLongKeepsAnIdenticalReplacement()
+tests.testOKLongRequiresEvidenceOfTheEditsBetweenSnapshots()
+tests.testOKLongKeepsTypingReportedInOneInsertion()
+tests.testOKLongDuringRecordingAndCommitWaitDoesNotQueueDeletion()
+tests.testOKLongCanDeleteTheCommitAlsoUsedForQueuedReturn()
 tests.testFinishWaitsForInclusiveTailAndBlackHoleDrainBeforeAllowingAnotherSession()
 tests.testMissingTailFrameIsFilledWithSilenceAfterWaiting()
 tests.testReconnectWaitsForDisconnectedCaptureToDrainAndCanReuseSessionID()
 try tests.testHelperDeliversShortHandshakeBeforeWaitingForReply()
-print("4 Passport bridge tests passed")
+tests.testOkClickSendsOneBackspaceWhileIdle()
+tests.testOkClickDoesNotRunDuringRecordingOrWaitForVoiceText()
+tests.testReturnPressedJustAfterUpWaitsForTheDelayedPttUpAndVoiceText()
+tests.testTaggedReturnDoesNotFollowAnAbortedOrDifferentSession()
+tests.testTaggedReturnBeforePttDownDoesNotFollowTheNewFocus()
+tests.testLateTextFromPriorSessionDoesNotConfirmASecondSession(afterTimeout: false)
+tests.testLateTextFromPriorSessionDoesNotConfirmASecondSession(afterTimeout: true)
+tests.testChangingEachBindingTakesEffectOnTheCurrentBridge()
+tests.testSavedShortcutSendsItsKeyAndModifiersAfterReloadingBindings()
+tests.testRestoringDefaultsClearsAllSavedBindings()
+tests.testDownLongDoesNotSendOrQueueItsBindingDuringCapture()
+tests.testCustomReturnIsIgnoredWhileRecordingAndNeverDeferred()
+print("39 Passport bridge tests passed")
