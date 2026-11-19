@@ -273,6 +273,20 @@ struct PassportBridgeTests {
         expectEqual(harness.commands.last, "ready")
     }
 
+    func testSecondUpDisablesDraftStartupRetryAndLetsInFlightStartupFinish() {
+        let harness = Harness(delayStart: true)
+        harness.startVoiceCapture()
+        let draft = harness.drafts[0]
+        expectEqual(draft.canRetryStart?(), true)
+        harness.stopVoiceCapture()
+        expectEqual(draft.canRetryStart?(), false)
+
+        draft.completeStart()
+        harness.outputs[0].completeDrain()
+        draft.complete()
+        expectEqual(harness.target.text, "AB")
+    }
+
     func testStaleCancelCannotDiscardAConfirmedOrDifferentDraft() {
         let harness = Harness()
         harness.startVoiceCapture()
@@ -529,6 +543,7 @@ struct PassportBridgeTests {
         var text = "B"
         var isFocused = true
         private(set) var cancelCount = 0
+        private(set) var canRetryStart: (() -> Bool)?
         private var startCompletion: ((Result<Void, Error>) -> Void)?
         private var finishCompletion: ((Result<PassportInputTarget?, Error>) -> Void)?
         private var cancelCompletion: (() -> Void)?
@@ -538,7 +553,8 @@ struct PassportBridgeTests {
             self.delayStart = delayStart
         }
 
-        func start(_ completion: @escaping (Result<Void, Error>) -> Void) {
+        func start(canRetry: @escaping () -> Bool, _ completion: @escaping (Result<Void, Error>) -> Void) {
+            canRetryStart = canRetry
             startCompletion = completion
             if !delayStart { completeStart() }
         }
@@ -630,6 +646,7 @@ tests.testCustomReturnIsIgnoredWhileRecordingAndNeverDeferred()
 tests.testConfirmWritesTheDraftAfterTheAudioDrains()
 tests.testCancelDiscardsTheDraftAndWaitsForTheInputMethodBeforeReady()
 tests.testCancelWhileOpeningIgnoresTheDelayedStart()
+tests.testSecondUpDisablesDraftStartupRetryAndLetsInFlightStartupFinish()
 tests.testStaleCancelCannotDiscardAConfirmedOrDifferentDraft()
 tests.testDownPressedDuringFinalizationSendsOneReturnAfterPaste()
 tests.testFirstTaggedDownCanArriveAfterPaste()
@@ -639,4 +656,4 @@ tests.testUndoPressedDuringFinalizationWaitsForPasteAndKeepsFocus()
 tests.testEmptyOrUnrestoredDraftDoesNotSendQueuedKeys()
 tests.testDisconnectDiscardsTheDraftAndLateCompletion()
 tests.testOkClickDoesNotEditTheTargetWhileTheDraftIsOpen()
-print("24 Passport bridge tests passed")
+print("25 Passport bridge tests passed")

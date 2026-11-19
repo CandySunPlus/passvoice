@@ -1,17 +1,31 @@
 import AppKit
 import Carbon.HIToolbox
+import CoreAudio
 
 // Doubao sees a standard, focused NSTextView for the whole voice session.
 final class MacVoiceDraft: PassportVoiceDraft {
+    private enum Dictation {
+        case idle, starting, listening, unverified
+    }
+
+    private static let initialInputGrace: DispatchTimeInterval = .milliseconds(350)
+    private static let retriedInputTimeout: DispatchTimeInterval = .milliseconds(750)
+
     private let target: MacInputTarget
     private let inputSourceID: String
+    private let inputMethod: NSRunningApplication?
     private let panel: VoiceDraftPanel
     private var editor: NSTextView { panel.editor }
-    private var listening = false
+    private var dictation = Dictation.idle
     private var closed = false
 
     var isFocused: Bool {
         target.isFrontmost && panel.isKeyWindow && panel.firstResponder === editor
+    }
+
+    private var activeInputContext: NSTextInputContext? {
+        guard isFocused, let context = editor.inputContext, NSTextInputContext.current === context else { return nil }
+        return context
     }
 
     init() throws {
@@ -20,35 +34,34 @@ final class MacVoiceDraft: PassportVoiceDraft {
             throw BridgeError("Focus the input for your Passport voice draft and check Accessibility permission")
         }
         guard let source = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue(),
-              Self.property(kTISPropertyBundleID, of: source) == "com.bytedance.inputmethod.doubaoime",
+              let bundleID = Self.property(kTISPropertyBundleID, of: source),
+              bundleID == "com.bytedance.inputmethod.doubaoime",
               let inputSourceID = Self.property(kTISPropertyInputSourceID, of: source) else {
             throw BridgeError("Select the Doubao input source before starting Passport voice input")
         }
         self.target = target
         self.inputSourceID = inputSourceID
+        inputMethod = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first
         panel = VoiceDraftPanel()
     }
 
-    func start(_ completion: @escaping (Result<Void, Error>) -> Void) {
+    func start(canRetry: @escaping () -> Bool, _ completion: @escaping (Result<Void, Error>) -> Void) {
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(editor)
         // Check after AppKit has delivered the key-window transition to the input system.
         DispatchQueue.main.async { [weak self] in
-            self?.beginWhenInputReady(until: .now() + .seconds(1), completion: completion)
+            self?.beginWhenInputReady(until: .now() + .seconds(1), canRetry: canRetry, completion: completion)
         }
     }
 
     private func beginWhenInputReady(until deadline: DispatchTime, requestedSource: Bool = false,
-                                     completion: @escaping (Result<Void, Error>) -> Void) {
+                                     canRetry: @escaping () -> Bool, completion: @escaping (Result<Void, Error>) -> Void) {
         guard !closed else { return }
         var requestedSource = requestedSource
-        if isFocused, let context = editor.inputContext, NSTextInputContext.current === context {
+        if let context = activeInputContext {
             if context.selectedKeyboardInputSource == inputSourceID {
                 do {
-                    try VoiceHotkey.tapRightOption()
-                    listening = true
-                    panel.setPhase(.listening)
-                    completion(.success(()))
+                    try startDictation(canRetry: canRetry, completion: completion)
                 } catch {
                     completion(.failure(error))
                 }
@@ -66,14 +79,68 @@ final class MacVoiceDraft: PassportVoiceDraft {
             completion(.failure(BridgeError(message)))
         } else {
             DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(25)) { [weak self] in
-                self?.beginWhenInputReady(until: deadline, requestedSource: requestedSource, completion: completion)
+                self?.beginWhenInputReady(until: deadline, requestedSource: requestedSource,
+                                          canRetry: canRetry, completion: completion)
             }
         }
     }
 
+    private func startDictation(canRetry: @escaping () -> Bool,
+                                completion: @escaping (Result<Void, Error>) -> Void) throws {
+        let running = audioInputRunning
+        guard running != true else {
+            throw BridgeError("Stop the current Doubao dictation before starting Passport voice input")
+        }
+        try VoiceHotkey.tapRightOption()
+        if running == nil {
+            // Older macOS versions cannot report per-process audio input.
+            dictation = .unverified
+            reportListening(completion)
+        } else {
+            dictation = .starting
+            waitForAudioInput(until: .now() + Self.initialInputGrace, canRetry: canRetry, completion: completion)
+        }
+    }
+
+    private func waitForAudioInput(until deadline: DispatchTime, canRetry: (() -> Bool)?,
+                                   completion: @escaping (Result<Void, Error>) -> Void) {
+        guard !closed else { return }
+        guard activeInputContext?.selectedKeyboardInputSource == inputSourceID else {
+            completion(.failure(BridgeError("The Passport voice draft lost the Doubao input context")))
+            return
+        }
+        guard let running = audioInputRunning else {
+            completion(.failure(BridgeError("Unable to verify that Doubao started receiving audio")))
+            return
+        }
+        if running {
+            dictation = .listening
+            reportListening(completion)
+        } else if DispatchTime.now() < deadline {
+            let nextCheck = min(deadline, .now() + .milliseconds(40))
+            DispatchQueue.main.asyncAfter(deadline: nextCheck) { [weak self] in
+                self?.waitForAudioInput(until: deadline, canRetry: canRetry, completion: completion)
+            }
+        } else if canRetry?() == true {
+            do {
+                try VoiceHotkey.tapRightOption()
+                waitForAudioInput(until: .now() + Self.retriedInputTimeout, canRetry: nil, completion: completion)
+            } catch {
+                completion(.failure(error))
+            }
+        } else {
+            completion(.failure(BridgeError("Doubao did not start receiving Passport audio")))
+        }
+    }
+
+    private func reportListening(_ completion: (Result<Void, Error>) -> Void) {
+        panel.setPhase(.listening)
+        completion(.success(()))
+    }
+
     func finish(_ completion: @escaping (Result<PassportInputTarget?, Error>) -> Void) {
         do {
-            try stopListening()
+            _ = try stopListening()
         } catch {
             completion(.failure(error))
             return
@@ -84,8 +151,7 @@ final class MacVoiceDraft: PassportVoiceDraft {
     }
 
     func cancel(_ completion: @escaping () -> Void) {
-        let waitForStop = listening && isFocused
-        try? stopListening()
+        let waitForStop = (try? stopListening()) == true
         closed = true
         if waitForStop {
             // Keep the draft as the IME client until the stop hotkey has been delivered.
@@ -99,11 +165,17 @@ final class MacVoiceDraft: PassportVoiceDraft {
         }
     }
 
-    private func stopListening() throws {
-        guard isFocused else { throw BridgeError("The Passport voice draft lost focus") }
-        guard listening else { return }
+    private func stopListening() throws -> Bool {
+        guard dictation != .idle else { return false }
+        guard activeInputContext?.selectedKeyboardInputSource == inputSourceID else {
+            throw BridgeError("The Passport voice draft lost the Doubao input context")
+        }
+        let previous = dictation
+        dictation = .idle
+        // The same shortcut starts and stops Doubao. Sending it while idle would start recording.
+        guard previous == .unverified || audioInputRunning == true else { return false }
         try VoiceHotkey.tapRightOption()
-        listening = false
+        return true
     }
 
     private func settle(previous: String?, changedAt: DispatchTime, deadline: DispatchTime,
@@ -171,5 +243,26 @@ final class MacVoiceDraft: PassportVoiceDraft {
     private static func property(_ key: CFString, of source: TISInputSource) -> String? {
         guard let value = TISGetInputSourceProperty(source, key) else { return nil }
         return Unmanaged<CFString>.fromOpaque(value).takeUnretainedValue() as String
+    }
+
+    private var audioInputRunning: Bool? {
+        guard #available(macOS 14.2, *), let inputMethod, !inputMethod.isTerminated else { return nil }
+        var pid = inputMethod.processIdentifier
+        var process = AudioObjectID(kAudioObjectUnknown)
+        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyTranslatePIDToProcessObject,
+                                                 mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address,
+                                         UInt32(MemoryLayout<pid_t>.size), &pid, &size, &process) == noErr else {
+            return nil
+        }
+        if process == kAudioObjectUnknown { return false }
+
+        address.mSelector = kAudioProcessPropertyIsRunningInput
+        var running: UInt32 = 0
+        size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(process, &address, 0, nil, &size, &running) == noErr else { return nil }
+        return running != 0
     }
 }

@@ -56,7 +56,7 @@ protocol PassportInputTarget: AnyObject {
 protocol PassportVoiceDraft: AnyObject {
     var isFocused: Bool { get }
 
-    func start(_ completion: @escaping (Result<Void, Error>) -> Void)
+    func start(canRetry: @escaping () -> Bool, _ completion: @escaping (Result<Void, Error>) -> Void)
     // A nil result means no text was inserted.
     func finish(_ completion: @escaping (Result<PassportInputTarget?, Error>) -> Void)
     func cancel(_ completion: @escaping () -> Void)
@@ -346,7 +346,10 @@ final class PassportBridge {
             log("Passport session \(id) started")
             statusChanged(.recording)
             if let draft {
-                draft.start { [weak self, weak capture] result in
+                draft.start(canRetry: { [weak self, weak capture] in
+                    guard let self, let capture else { return false }
+                    return self.capture === capture && capture.tail == nil
+                }) { [weak self, weak capture] result in
                     guard let self, let capture, self.capture === capture else { return }
                     switch result {
                     case .success: self.startPlayback(capture, now: .now())
