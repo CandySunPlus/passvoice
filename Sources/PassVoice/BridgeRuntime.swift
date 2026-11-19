@@ -1,3 +1,4 @@
+import AppKit
 import Darwin
 import Foundation
 
@@ -13,6 +14,7 @@ final class BridgeRuntime {
     private let onExit: (Int32) -> Void
     private var bridge: PassportBridge?
     private var timer: DispatchSourceTimer?
+    private var activationObserver: NSObjectProtocol?
     private var running = false
     private var stopping = false
     private var writeFailed = false
@@ -51,7 +53,13 @@ final class BridgeRuntime {
             observeInputTarget: MacInputTarget.observe,
             send: { [weak self] command in self?.send(command) },
             log: log,
-            statusChanged: onStatus,
+            statusChanged: { [weak self] status in
+                guard let self else { return }
+                if status == .handshaking, !self.manual {
+                    MacInputTarget.prepareFocus(for: NSWorkspace.shared.frontmostApplication)
+                }
+                self.onStatus(status)
+            },
             verbose: verbose
         )
         self.bridge = bridge
@@ -65,12 +73,23 @@ final class BridgeRuntime {
             guard let self else { return }
             self.running = false
             self.timer?.cancel()
+            self.stopObservingActivation()
             self.bridge?.shutdown()
             self.onExit(self.writeFailed ? EXIT_FAILURE : status)
         })
         running = true
 
         if let device {
+            if !manual {
+                let workspace = NSWorkspace.shared
+                activationObserver = workspace.notificationCenter.addObserver(
+                    forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+                ) { notification in
+                    let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+                    MacInputTarget.prepareFocus(for: application)
+                }
+                MacInputTarget.prepareFocus(for: workspace.frontmostApplication)
+            }
             log("Looking for Passport \(device.uuidString). Release Vokie's connection if it is in use.")
             send(HelperCommand(type: "set-preferred-device", deviceId: device))
             let timer = DispatchSource.makeTimerSource(queue: .main)
@@ -87,8 +106,15 @@ final class BridgeRuntime {
         guard running, !stopping else { return }
         stopping = true
         timer?.cancel()
+        stopObservingActivation()
         bridge?.shutdown()
         helper.stop()
+    }
+
+    private func stopObservingActivation() {
+        guard let activationObserver else { return }
+        NSWorkspace.shared.notificationCenter.removeObserver(activationObserver)
+        self.activationObserver = nil
     }
 
     private func send(_ command: HelperCommand) {

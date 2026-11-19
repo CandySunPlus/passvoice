@@ -23,7 +23,12 @@ enum PassportMacInput {
 }
 
 final class MacInputTarget: PassportInputTarget {
-    private static let systemAccessibility = AXUIElementCreateSystemWide()
+    private static let systemAccessibility: AXUIElement = {
+        let element = AXUIElementCreateSystemWide()
+        _ = AXUIElementSetMessagingTimeout(element, 0.15)
+        return element
+    }()
+    private static let enhancedAccessibility = "AXEnhancedUserInterface"
     private let application: NSRunningApplication
     private let appElement: AXUIElement
     private let element: AXUIElement
@@ -34,15 +39,20 @@ final class MacInputTarget: PassportInputTarget {
         self.element = element
     }
 
+    static func prepareFocus(for application: NSRunningApplication?) {
+        guard let application, let appElement = accessibilityApplication(for: application),
+              focusedElement(in: appElement, pid: application.processIdentifier) == nil else { return }
+        requestEnhancedAccessibility(in: appElement)
+    }
+
     static func observe() -> MacInputTarget? {
-        guard AXIsProcessTrusted(), !IsSecureEventInputEnabled(),
-              let app = NSWorkspace.shared.frontmostApplication,
-              app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return nil }
-        let appElement = AXUIElementCreateApplication(app.processIdentifier)
-        _ = AXUIElementSetMessagingTimeout(appElement, 0.15)
-        _ = AXUIElementSetMessagingTimeout(systemAccessibility, 0.15)
-        guard let element = focusedElement(in: appElement, pid: app.processIdentifier),
-              attribute(kAXSubroleAttribute, of: element) as? String != kAXSecureTextFieldSubrole,
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              let appElement = accessibilityApplication(for: app) else { return nil }
+        guard let element = focusedElement(in: appElement, pid: app.processIdentifier) else {
+            requestEnhancedAccessibility(in: appElement)
+            return nil
+        }
+        guard attribute(kAXSubroleAttribute, of: element) as? String != kAXSecureTextFieldSubrole,
               app.isActive else { return nil }
         return MacInputTarget(application: app, appElement: appElement, element: element)
     }
@@ -60,6 +70,25 @@ final class MacInputTarget: PassportInputTarget {
     func send(_ key: PassportKeystroke) throws {
         guard isFocused else { throw BridgeError("The original Passport input lost focus") }
         try PassportMacInput.send(key, to: application.processIdentifier)
+    }
+
+    private static func accessibilityApplication(for application: NSRunningApplication) -> AXUIElement? {
+        let pid = application.processIdentifier
+        guard application.isActive, pid != ProcessInfo.processInfo.processIdentifier,
+              AXIsProcessTrusted(), !IsSecureEventInputEnabled() else { return nil }
+        let element = AXUIElementCreateApplication(pid)
+        _ = AXUIElementSetMessagingTimeout(element, 0.15)
+        return element
+    }
+
+    private static func requestEnhancedAccessibility(in app: AXUIElement) {
+        var writable = DarwinBoolean(false)
+        guard attribute(kAXFocusedWindowAttribute, of: app) != nil,
+              attribute(enhancedAccessibility, of: app) as? Bool == false,
+              AXUIElementIsAttributeSettable(app, enhancedAccessibility as CFString, &writable) == .success,
+              writable.boolValue else { return }
+        // The focused control can appear asynchronously, even if the setter reports an error.
+        _ = AXUIElementSetAttributeValue(app, enhancedAccessibility as CFString, kCFBooleanTrue)
     }
 
     private static func focusedElement(in app: AXUIElement, pid: pid_t) -> AXUIElement? {
