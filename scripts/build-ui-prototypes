@@ -81,7 +81,8 @@ idf_component_register(SRCS "preview_main.c" "passvoice_screen.c"
     INCLUDE_DIRS "." REQUIRES bsp)
 CMAKE
     printf '\nCONFIG_LV_FONT_MONTSERRAT_30=y\n' >> "$firmware/sdkconfig.defaults"
-    docker run --rm --mount "type=bind,source=$firmware,target=/preview" -w /preview espressif/idf:v5.5.3 \
+    docker run --rm --mount "type=bind,source=$firmware,target=/preview" -w /preview \
+        docker.io/candysunplus/passvoice-idf:v5.5.3-esp32c3 \
         bash -ec 'idf.py merge-bin -o FoloToy-AI-Passport-full.bin && python3 tools/verify_firmware.py build'
     install -m 644 "$firmware/build/FoloToy-AI-Passport-full.bin" "$output/PassVoice-UI-Preview-full.bin"
     printf '%s\n' "$output/PassVoice-UI-Preview-full.bin"

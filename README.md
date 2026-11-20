@@ -59,6 +59,16 @@ Passport 屏幕用大字显示连接和录音状态。按下实体键，PassVoic
 
 验证通过后，可用 AI Passport 小程序安装生成的 `build/FoloToy-AI-Passport-full.bin`。 [固件安装与分区约定](https://github.com/CandySunPlus/vokie-ai-passport-firmware/blob/0e3543259f578f5d5678a58edecca5c8bb81e927/docs/development/engineering/ble-recovery-compatibility.zh_CN.md)
 
+### 构建界面预览固件
+
+安装 CMake 并启动 Docker。将 `PASSVOICE_FIRMWARE_BASE` 指向已安装 `managed_components` 的固件检出目录（默认 `../passvoice-firmware-base`），然后运行：
+
+```sh
+./scripts/build-ui-prototypes --firmware
+```
+
+本地没有镜像时，Docker 会从 Docker Hub 拉取 `candysunplus/passvoice-idf:v5.5.3-esp32c3`（仅 `linux/arm64`），无需自行构建镜像。打包和校验通过后生成 `dist/ui-prototypes/PassVoice-UI-Preview-full.bin`。
+
 ## 命令行调试
 
 1. 在运行 macOS 12 或更新版本的 Apple Silicon Mac 上安装 Xcode Command Line Tools、BlackHole 2ch 和豆包输入法。
