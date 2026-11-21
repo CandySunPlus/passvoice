@@ -1,0 +1,398 @@
+{
+  "version": 1,
+  "created_at": "2026-11-21T04:29:12Z",
+  "updated_at": "2026-11-21T04:35:19Z",
+  "files": {
+    ".gitattributes": {
+      "role": "index",
+      "sha256": "21fa16a2122e2b0360b47502c577428b645437e08e9e87ffba661f84853cb476",
+      "size": 291,
+      "normalized_sha256": "21fa16a2122e2b0360b47502c577428b645437e08e9e87ffba661f84853cb476"
+    },
+    ".gitignore": {
+      "role": "index",
+      "sha256": "dca0863caebcad8e813e6927228a69f2cc4daf2babcce1dad5b247e969ed1e9a",
+      "size": 162,
+      "normalized_sha256": "dca0863caebcad8e813e6927228a69f2cc4daf2babcce1dad5b247e969ed1e9a"
+    },
+    "AGENTS.md": {
+      "role": "index",
+      "sha256": "a489754de9958b2bd956b27f7e94f77ebaf6fec3bd52566a961a8e7a258b0170",
+      "size": 17160,
+      "normalized_sha256": "a489754de9958b2bd956b27f7e94f77ebaf6fec3bd52566a961a8e7a258b0170"
+    },
+    "GLOSSARY.md": {
+      "role": "index",
+      "sha256": "582513b048b554d1c332b1938b610c92c90e31b89cc8f66ac50e4bc4d278bce2",
+      "size": 469,
+      "normalized_sha256": "582513b048b554d1c332b1938b610c92c90e31b89cc8f66ac50e4bc4d278bce2"
+    },
+    "Package.swift": {
+      "role": "index",
+      "sha256": "93628e74304a4c96f0ab6cdc51fde9f4c491a1c64abc52e3c559bf0d5427019e",
+      "size": 864,
+      "normalized_sha256": "93628e74304a4c96f0ab6cdc51fde9f4c491a1c64abc52e3c559bf0d5427019e"
+    },
+    "README.md": {
+      "role": "index",
+      "sha256": "6ede478a355b66f2bce5ffddebb622047f43dd4e8385da99b0b365b71278c504",
+      "size": 9559,
+      "normalized_sha256": "6ede478a355b66f2bce5ffddebb622047f43dd4e8385da99b0b365b71278c504"
+    },
+    "Sources/PassVoice/ADPCM.swift": {
+      "role": "index",
+      "sha256": "2a6054154d23d35805eac0bc55ce5e942a82fe3a6f95c0d83a624e02f9ea755a",
+      "size": 2060,
+      "normalized_sha256": "2a6054154d23d35805eac0bc55ce5e942a82fe3a6f95c0d83a624e02f9ea755a"
+    },
+    "Sources/PassVoice/BlackHole.swift": {
+      "role": "index",
+      "sha256": "9a419b5cfa2f513bb583d46ca62bc89a439c1820b77f6136e4dc3483dda00fd3",
+      "size": 7859,
+      "normalized_sha256": "9a419b5cfa2f513bb583d46ca62bc89a439c1820b77f6136e4dc3483dda00fd3"
+    },
+    "Sources/PassVoice/BridgeRuntime.swift": {
+      "role": "index",
+      "sha256": "c41059962adbbbeda09f3b9910a6cf52df7549f71f9e807899eb7fa2c8cf1f2c",
+      "size": 5153,
+      "normalized_sha256": "c41059962adbbbeda09f3b9910a6cf52df7549f71f9e807899eb7fa2c8cf1f2c"
+    },
+    "Sources/PassVoice/CommandLine.swift": {
+      "role": "index",
+      "sha256": "c1081d4e229ef89ed8c279230f4f28ebb4a3dedac5987c5134b2eb002c2d7940",
+      "size": 3957,
+      "normalized_sha256": "c1081d4e229ef89ed8c279230f4f28ebb4a3dedac5987c5134b2eb002c2d7940"
+    },
+    "Sources/PassVoice/HelperProcess.swift": {
+      "role": "index",
+      "sha256": "78791c8ef760fe3753fe6c119691cb3e4c3c1ade91687c5986686f43085a7de3",
+      "size": 2265,
+      "normalized_sha256": "78791c8ef760fe3753fe6c119691cb3e4c3c1ade91687c5986686f43085a7de3"
+    },
+    "Sources/PassVoice/MacVoiceDraft.swift": {
+      "role": "index",
+      "sha256": "3b6391d250b9ed1048a89b1b2a141998e77c70d51d49b064a853c850b6cd3002",
+      "size": 12168,
+      "normalized_sha256": "3b6391d250b9ed1048a89b1b2a141998e77c70d51d49b064a853c850b6cd3002"
+    },
+    "Sources/PassVoice/MenuBarApp.swift": {
+      "role": "index",
+      "sha256": "d433e59c1ccd8d5c2455daf70558a6f80cb83d4c167aba4276667d666949d466",
+      "size": 12663,
+      "normalized_sha256": "d433e59c1ccd8d5c2455daf70558a6f80cb83d4c167aba4276667d666949d466"
+    },
+    "Sources/PassVoice/PassportActions.swift": {
+      "role": "index",
+      "sha256": "eed3f99df61d19f1fdd7ac7a287141d341fed189eba0c4cb8edb4ab384f7dcdf",
+      "size": 1766,
+      "normalized_sha256": "eed3f99df61d19f1fdd7ac7a287141d341fed189eba0c4cb8edb4ab384f7dcdf"
+    },
+    "Sources/PassVoice/PassportBridge.swift": {
+      "role": "index",
+      "sha256": "8f98bb0492bc2e0d942dc2cb1180ff41cd6a3717579f21251db4ec53bb83f974",
+      "size": 18525,
+      "normalized_sha256": "8f98bb0492bc2e0d942dc2cb1180ff41cd6a3717579f21251db4ec53bb83f974"
+    },
+    "Sources/PassVoice/PassportButtonBindings.swift": {
+      "role": "index",
+      "sha256": "35e0facfc2ae46ead35a121e8053817b6951a1d275ed20ce31a8c3f75d634abe",
+      "size": 1072,
+      "normalized_sha256": "35e0facfc2ae46ead35a121e8053817b6951a1d275ed20ce31a8c3f75d634abe"
+    },
+    "Sources/PassVoice/PassportButtonSettings.swift": {
+      "role": "index",
+      "sha256": "2b17bda66739e11e6405758bdd49cba60175887152c5cb03ba18a67e0055822e",
+      "size": 14606,
+      "normalized_sha256": "2b17bda66739e11e6405758bdd49cba60175887152c5cb03ba18a67e0055822e"
+    },
+    "Sources/PassVoice/PassportMacInput.swift": {
+      "role": "index",
+      "sha256": "f88b97c9879e3c30809bb313e17d3332d6b783b7f4e09f0498e6a948c7e53b0d",
+      "size": 6907,
+      "normalized_sha256": "f88b97c9879e3c30809bb313e17d3332d6b783b7f4e09f0498e6a948c7e53b0d"
+    },
+    "Sources/PassVoice/SessionFrames.swift": {
+      "role": "index",
+      "sha256": "7bd8dcab28abf9bbc206117a1c7d15a380af2eb42303191c9264143a7eccd47f",
+      "size": 1748,
+      "normalized_sha256": "7bd8dcab28abf9bbc206117a1c7d15a380af2eb42303191c9264143a7eccd47f"
+    },
+    "Sources/PassVoice/VoiceDraftPanel.swift": {
+      "role": "index",
+      "sha256": "11fc8247e7b0595a437fd950ba885d6eec13a75c9f738c444f6393256e2d1810",
+      "size": 10976,
+      "normalized_sha256": "11fc8247e7b0595a437fd950ba885d6eec13a75c9f738c444f6393256e2d1810"
+    },
+    "Sources/PassVoice/VoiceHotkey.swift": {
+      "role": "index",
+      "sha256": "2eca48c7eef3d70912ec565ef7fa38c23ac7def3d21247c8e854fc732646a5eb",
+      "size": 1756,
+      "normalized_sha256": "2eca48c7eef3d70912ec565ef7fa38c23ac7def3d21247c8e854fc732646a5eb"
+    },
+    "Sources/PassVoice/main.swift": {
+      "role": "index",
+      "sha256": "4ca11891efbf183a7ecae891bcef01c969ae121c54e1bae2703af1c501054821",
+      "size": 301,
+      "normalized_sha256": "4ca11891efbf183a7ecae891bcef01c969ae121c54e1bae2703af1c501054821"
+    },
+    "Sources/PassportHelper/AiPassportHelper.swift": {
+      "role": "index",
+      "sha256": "671f904daeda5d031a6155d2e74cb65785d0fbc42082f5b573e3d118152a48df",
+      "size": 32596,
+      "normalized_sha256": "671f904daeda5d031a6155d2e74cb65785d0fbc42082f5b573e3d118152a48df"
+    },
+    "Sources/PassportHelper/HelperInfo.plist": {
+      "role": "index",
+      "sha256": "b8e90fbb2b103ee55484a48fc29d4bfcdd8b11770df91febf01501d483c71438",
+      "size": 491,
+      "normalized_sha256": "b8e90fbb2b103ee55484a48fc29d4bfcdd8b11770df91febf01501d483c71438"
+    },
+    "Sources/PassportHelper/LICENSE": {
+      "role": "index",
+      "sha256": "0ca7f3a382d5d681ced06d6008081c1d51b05a2547c94c3350058efbe7ddb5ee",
+      "size": 1064,
+      "normalized_sha256": "0ca7f3a382d5d681ced06d6008081c1d51b05a2547c94c3350058efbe7ddb5ee"
+    },
+    "Tests/PassVoiceTests/main.swift": {
+      "role": "index",
+      "sha256": "f5e4c340a2630dc2eddc1696dcb50a36af06d05536933c2954fa8ed07d9c71cb",
+      "size": 26292,
+      "normalized_sha256": "f5e4c340a2630dc2eddc1696dcb50a36af06d05536933c2954fa8ed07d9c71cb"
+    },
+    "aoci.code.txt": {
+      "role": "index",
+      "sha256": "71a3ff999e01f4e1ebcc98a40bfd53a209d477448595b14dcd33c80dd864fc55",
+      "size": 20539,
+      "normalized_sha256": "71a3ff999e01f4e1ebcc98a40bfd53a209d477448595b14dcd33c80dd864fc55"
+    },
+    "aoci.meta.txt": {
+      "role": "index",
+      "sha256": "4e847b2679814f2d38ff8f9c44b03e026619f84d724be83634539eb369fe0199",
+      "size": 2534,
+      "normalized_sha256": "4e847b2679814f2d38ff8f9c44b03e026619f84d724be83634539eb369fe0199"
+    },
+    "aoci.txt": {
+      "role": "index",
+      "sha256": "5c547390fb76cce476984761582a64780acca89a417006083403d76ded710d57",
+      "size": 298,
+      "normalized_sha256": "5c547390fb76cce476984761582a64780acca89a417006083403d76ded710d57"
+    },
+    "app/Info.plist": {
+      "role": "index",
+      "sha256": "fed982bd215c0d4efdc0167693720caa1efa20b8294749f08ce2ec149cf7ba96",
+      "size": 1020,
+      "normalized_sha256": "fed982bd215c0d4efdc0167693720caa1efa20b8294749f08ce2ec149cf7ba96"
+    },
+    "app/PassVoice.icns": {
+      "role": "index",
+      "sha256": "02e780908f8faed7deefe32cbbbdad0698afc0f238647cb078d9b843ae4c7747",
+      "size": 603842
+    },
+    "app/PassVoice.svg": {
+      "role": "observe",
+      "sha256": "da55d6fe15b4c2094df04379a978c25012bd63f5306f7156c55eab7af62f4e01",
+      "size": 2343,
+      "normalized_sha256": "da55d6fe15b4c2094df04379a978c25012bd63f5306f7156c55eab7af62f4e01"
+    },
+    "app/signing-identity": {
+      "role": "index",
+      "sha256": "e620245b07f2cca676bbe9459027290f40577299f3c445284e306bcce967f9d3",
+      "size": 41,
+      "normalized_sha256": "e620245b07f2cca676bbe9459027290f40577299f3c445284e306bcce967f9d3"
+    },
+    "docs/agents/domain.md": {
+      "role": "index",
+      "sha256": "efbce683c4b091eafbb7d975001a6cb7ed155c70829028e19e1304b40c8d9c19",
+      "size": 683,
+      "normalized_sha256": "efbce683c4b091eafbb7d975001a6cb7ed155c70829028e19e1304b40c8d9c19"
+    },
+    "docs/agents/issue-tracker.md": {
+      "role": "index",
+      "sha256": "db2006a32c19cfa796532c22f227379fd1f5324a9e4b6e7171695601773052b2",
+      "size": 4241,
+      "normalized_sha256": "db2006a32c19cfa796532c22f227379fd1f5324a9e4b6e7171695601773052b2"
+    },
+    "docs/agents/triage-labels.md": {
+      "role": "index",
+      "sha256": "0b5f6c7e9da07cc6748583158abf45453c8e882172baff896045af76dd8d19ca",
+      "size": 533,
+      "normalized_sha256": "0b5f6c7e9da07cc6748583158abf45453c8e882172baff896045af76dd8d19ca"
+    },
+    "firmware/0001-passvoice-up-only.patch": {
+      "role": "index",
+      "sha256": "edb159dc8bfdf7fc2d10f5e5a1e83ce223a631264d7eca443949b41fb13403ed",
+      "size": 20342,
+      "normalized_sha256": "edb159dc8bfdf7fc2d10f5e5a1e83ce223a631264d7eca443949b41fb13403ed"
+    },
+    "firmware/0002-passvoice-down-hold.patch": {
+      "role": "index",
+      "sha256": "379a3c2ebefff1a13ddc81ea25c3cbc034eb31bbbf90f7f90a053695c5c03baf",
+      "size": 18878,
+      "normalized_sha256": "379a3c2ebefff1a13ddc81ea25c3cbc034eb31bbbf90f7f90a053695c5c03baf"
+    },
+    "firmware/0003-passvoice-deliver-gestures-from-worker.patch": {
+      "role": "index",
+      "sha256": "bb3ec7e76d394d35cbb22b4ff57158be802c112acea7fb4ed97a4412650fd6ac",
+      "size": 26503,
+      "normalized_sha256": "bb3ec7e76d394d35cbb22b4ff57158be802c112acea7fb4ed97a4412650fd6ac"
+    },
+    "firmware/0004-passvoice-resume-audio-link.patch": {
+      "role": "index",
+      "sha256": "dedfbf915fc2f43a4555c0d68a68279bf49fa5620c199bc1dc15b6789bef0265",
+      "size": 20219,
+      "normalized_sha256": "dedfbf915fc2f43a4555c0d68a68279bf49fa5620c199bc1dc15b6789bef0265"
+    },
+    "firmware/0005-passvoice-wait-for-audio-link.patch": {
+      "role": "index",
+      "sha256": "f8b71b188185b1330aae2cf350004341524647c34b83db19207fde189b20ed4c",
+      "size": 9032,
+      "normalized_sha256": "f8b71b188185b1330aae2cf350004341524647c34b83db19207fde189b20ed4c"
+    },
+    "firmware/0006-passvoice-status-screen.patch": {
+      "role": "index",
+      "sha256": "488fd904be61c28e0b5ca760ef7a69c0c3037d5b1cf8d092acdb8402e0511bf9",
+      "size": 14164,
+      "normalized_sha256": "488fd904be61c28e0b5ca760ef7a69c0c3037d5b1cf8d092acdb8402e0511bf9"
+    },
+    "firmware/0007-passvoice-cancel-voice.patch": {
+      "role": "index",
+      "sha256": "bc4c4b8b2949880730c6dbc97763e1c5711e3b538c86dd5dbebff587aa52438c",
+      "size": 20320,
+      "normalized_sha256": "bc4c4b8b2949880730c6dbc97763e1c5711e3b538c86dd5dbebff587aa52438c"
+    },
+    "prototype/app/Info.plist": {
+      "role": "index",
+      "sha256": "27c6fdb5019837294f355a2bc78b0a182096e6979973feb4350dbea046987fdd",
+      "size": 876,
+      "normalized_sha256": "27c6fdb5019837294f355a2bc78b0a182096e6979973feb4350dbea046987fdd"
+    },
+    "prototype/app/main.swift": {
+      "role": "index",
+      "sha256": "8149fe69cbe14aafc77da33d0a12c1694322b8ef753699b2384e514d891fcc86",
+      "size": 18410,
+      "normalized_sha256": "8149fe69cbe14aafc77da33d0a12c1694322b8ef753699b2384e514d891fcc86"
+    },
+    "prototype/passport/CMakeLists.txt": {
+      "role": "index",
+      "sha256": "a4328f6795ff276bb3145d4e12bb82c6670d57fc18ea0f0247c67ed1f4065ef3",
+      "size": 527,
+      "normalized_sha256": "a4328f6795ff276bb3145d4e12bb82c6670d57fc18ea0f0247c67ed1f4065ef3"
+    },
+    "prototype/passport/capture.c": {
+      "role": "index",
+      "sha256": "41efd4a77c37b9688972688cda86065d63f28b5c83fdb22a8ddec003aa7d6d7a",
+      "size": 1456,
+      "normalized_sha256": "41efd4a77c37b9688972688cda86065d63f28b5c83fdb22a8ddec003aa7d6d7a"
+    },
+    "prototype/passport/lv_conf.h": {
+      "role": "index",
+      "sha256": "8cc3ba8bcf1618d1f14ff56ca7815bb4071c9ab6afdec2dbb1af821286a2b0e9",
+      "size": 234,
+      "normalized_sha256": "8cc3ba8bcf1618d1f14ff56ca7815bb4071c9ab6afdec2dbb1af821286a2b0e9"
+    },
+    "prototype/passport/passvoice_screen.c": {
+      "role": "index",
+      "sha256": "3abfc86c1d1b2e3032608baf4ef24f35974ee7934184abbd712b2327ab306c54",
+      "size": 7919,
+      "normalized_sha256": "3abfc86c1d1b2e3032608baf4ef24f35974ee7934184abbd712b2327ab306c54"
+    },
+    "prototype/passport/passvoice_screen.h": {
+      "role": "index",
+      "sha256": "9240d1e712b6492299650d3398cc51a5bd953678ee4e41ef1bd58fe96cb69c82",
+      "size": 303,
+      "normalized_sha256": "9240d1e712b6492299650d3398cc51a5bd953678ee4e41ef1bd58fe96cb69c82"
+    },
+    "prototype/passport/preview_main.c": {
+      "role": "index",
+      "sha256": "d029b25b95fcbb96826bbad257ac664c5d53773e6053d3388c00f28a69fefeb7",
+      "size": 1818,
+      "normalized_sha256": "d029b25b95fcbb96826bbad257ac664c5d53773e6053d3388c00f28a69fefeb7"
+    },
+    "scripts/build-app": {
+      "role": "index",
+      "sha256": "55415c77c38d0e5373fc00b33bc7d5217eff37d445ff0dc26dcc297f2ff6c96a",
+      "size": 2157,
+      "normalized_sha256": "55415c77c38d0e5373fc00b33bc7d5217eff37d445ff0dc26dcc297f2ff6c96a"
+    },
+    "scripts/build-ui-prototypes": {
+      "role": "index",
+      "sha256": "de020264ef36cc1f70b6b2de5aeaba58c13ba3c2933a637cc7e8ed730a3616e4",
+      "size": 3572,
+      "normalized_sha256": "de020264ef36cc1f70b6b2de5aeaba58c13ba3c2933a637cc7e8ed730a3616e4"
+    },
+    "scripts/test": {
+      "role": "index",
+      "sha256": "5d3b825e4295e9b837d73881b439c44088d840d04c0ab9aad250b47e71431897",
+      "size": 483,
+      "normalized_sha256": "5d3b825e4295e9b837d73881b439c44088d840d04c0ab9aad250b47e71431897"
+    }
+  },
+  "managed_scope": {
+    "version": "managed-scope-baseline/v1",
+    "policy_identity": "e0f548d87fe5462c412a1c54409871a60ddf2ae5c30609258ff8739fdfcc8e76",
+    "observe_change_policy": "review_required",
+    "budget_policy_identity": "15e9b37a6c57e9bf03c9df3d0d049eb5b9a7f5540f9d34960408114e2538a32d",
+    "budget_policy": {
+      "version": "cognition-budget-policy/v1",
+      "mode": "enforce",
+      "whole_index": {
+        "target_tokens": 200000,
+        "warning_tokens": 300000,
+        "max_tokens": 400000
+      },
+      "r": [
+        {
+          "min_c": 1,
+          "max_c": 4,
+          "target_tokens": 25,
+          "max_tokens": 50
+        },
+        {
+          "min_c": 5,
+          "max_c": 7,
+          "target_tokens": 45,
+          "max_tokens": 90
+        },
+        {
+          "min_c": 8,
+          "max_c": 8,
+          "target_tokens": 70,
+          "max_tokens": 140
+        },
+        {
+          "min_c": 9,
+          "max_c": 9,
+          "target_tokens": 90,
+          "max_tokens": 180
+        }
+      ],
+      "s": [
+        {
+          "min_c": 1,
+          "max_c": 4,
+          "target_tokens": 20,
+          "max_tokens": 40
+        },
+        {
+          "min_c": 5,
+          "max_c": 7,
+          "target_tokens": 40,
+          "max_tokens": 80
+        },
+        {
+          "min_c": 8,
+          "max_c": 8,
+          "target_tokens": 70,
+          "max_tokens": 140
+        },
+        {
+          "min_c": 9,
+          "max_c": 9,
+          "target_tokens": 100,
+          "max_tokens": 200
+        }
+      ]
+    },
+    "apply_authorization_mode": "auto"
+  }
+}

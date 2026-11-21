@@ -3,3 +3,7 @@
 
 dist/
 app/.local-signing-identity
+
+# AOCI agent host integration (machine-bound; do not commit)
+.codex/config.toml
+.codex/config.toml.backup.*
