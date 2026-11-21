@@ -1,8 +1,180 @@
 {
   "version": 1,
-  "created_at": "2026-11-21T04:29:12Z",
-  "updated_at": "2026-11-21T04:35:19Z",
+  "created_at": "2026-11-21T05:16:12Z",
+  "updated_at": "2026-11-21T05:21:12Z",
   "files": {
+    ".build/passport-idf/tools/python_env/idf5.5_py3.12_env/lib/python3.12/site-packages/annotated_types/test_cases.py": {
+      "role": "observe",
+      "sha256": "d867472acb57b81ce97f78972828e6bc5669ca4db33fd1e6f645c6183846068e",
+      "size": 6310,
+      "normalized_sha256": "d867472acb57b81ce97f78972828e6bc5669ca4db33fd1e6f645c6183846068e"
+    },
+    ".build/passport-idf/tools/python_env/idf5.5_py3.12_env/lib/python3.12/site-packages/bitarray/test_bitarray.py": {
+      "role": "observe",
+      "sha256": "07d583ff655601a61c2e04a248d7ccaa3230f188ddf996613a7a26106509bdd1",
+      "size": 207093,
+      "normalized_sha256": "07d583ff655601a61c2e04a248d7ccaa3230f188ddf996613a7a26106509bdd1"
+    },
+    ".build/passport-idf/tools/python_env/idf5.5_py3.12_env/lib/python3.12/site-packages/bitarray/test_bitfields.py": {
+      "role": "observe",
+      "sha256": "ad370f19cea7506ba42f1d8c24090538b1225cf34204f7b9e63b34be98a92eec",
+      "size": 30173,
+      "normalized_sha256": "ad370f19cea7506ba42f1d8c24090538b1225cf34204f7b9e63b34be98a92eec"
+    },
+    ".build/passport-idf/tools/python_env/idf5.5_py3.12_env/lib/python3.12/site-packages/bitarray/test_free_threading.py": {
+      "role": "observe",
+      "sha256": "317808fd5eb3219117af43708030ca42181033e19fedcc34bc1c3c3cf1ba08fe",
+      "size": 28727,
+      "normalized_sha256": "317808fd5eb3219117af43708030ca42181033e19fedcc34bc1c3c3cf1ba08fe"
+    },
+    ".build/passport-idf/tools/python_env/idf5.5_py3.12_env/lib/python3.12/site-packages/bitarray/test_util.py": {
+      "role": "observe",
+      "sha256": "b21005062aa2dcdd416ddb1a4f76a329a8ac7b44c614e6f10569e5d9b65a92f7",
+      "size": 120665,
+      "normalized_sha256": "b21005062aa2dcdd416ddb1a4f76a329a8ac7b44c614e6f10569e5d9b65a92f7"
+    },
+    ".build/passport-idf/tools/python_env/idf5.5_py3.12_env/lib/python3.12/site-packages/certifi/tests/__init__.py": {
+      "role": "observe",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    ".build/passport-idf/tools/python_env/idf5.5_py3.12_env/lib/python3.12/site-packages/certifi/tests/test_certify.py": {
+      "role": "observe",
+      "sha256": "7c179d1edf37f7e912b133663735fb46c6338d5d0e5f8915d11c3bc287d227b8",
+      "size": 467,
+      "normalized_sha256": "7c179d1edf37f7e912b133663735fb46c6338d5d0e5f8915d11c3bc287d227b8"
+    },
+    ".build/passport-idf/tools/python_env/idf5.5_py3.12_env/lib/python3.12/site-packages/colorama/tests/__init__.py": {
+      "role": "observe",
+      "sha256": "32480f004cc641df91ab4c343d95d25f62da7515a150409c8ac258f254ab9b84",
+      "size": 75,
+      "normalized_sha256": "32480f004cc641df91ab4c343d95d25f62da7515a150409c8ac258f254ab9b84"
+    },
+    ".build/passport-idf/tools/python_env/idf5.5_py3.12_env/lib/python3.12/site-packages/colorama/tests/ansi_test.py": {
+      "role": "observe",
+      "sha256": "15e5620eb50834865caf9d393c0c6f5380235f3d5ab048802ecf465cc87045a1",
+      "size": 2839,
+      "normalized_sha256": "15e5620eb50834865caf9d393c0c6f5380235f3d5ab048802ecf465cc87045a1"
+    },
+    ".build/passport-idf/tools/python_env/idf5.5_py3.12_env/lib/python3.12/site-packages/colorama/tests/ansitowin32_test.py": {
+      "role": "observe",
+      "sha256": "44dec0221309e44a83b186828d5a3ea38bbc2730c3e2e9096e67af58a4bbd2b6",
+      "size": 10678,
+      "normalized_sha256": "44dec0221309e44a83b186828d5a3ea38bbc2730c3e2e9096e67af58a4bbd2b6"
+    },
+    ".build/passport-idf/tools/python_env/idf5.5_py3.12_env/lib/python3.12/site-packages/colorama/tests/initialise_test.py": {
+      "role": "observe",
+      "sha256": "05b3f2f977f21f027accaa33b903af36f419cecc7dbdd6ffd1b6179fb86c0537",
+      "size": 6741,
+      "normalized_sha256": "05b3f2f977f21f027accaa33b903af36f419cecc7dbdd6ffd1b6179fb86c0537"
+    },
+    ".build/passport-idf/tools/python_env/idf5.5_py3.12_env/lib/python3.12/site-packages/colorama/tests/isatty_test.py": {
+      "role": "observe",
+      "sha256": "3e0dba2d1a6fd3240307901cfacc605571bb86c035358bdaa45800a597d8cd98",
+      "size": 1866,
+      "normalized_sha256": "3e0dba2d1a6fd3240307901cfacc605571bb86c035358bdaa45800a597d8cd98"
+    },
+    ".build/passport-idf/tools/python_env/idf5.5_py3.12_env/lib/python3.12/site-packages/colorama/tests/utils.py": {
+      "role": "observe",
+      "sha256": "d48211ca51b7f73e7e773ab4f51fe782e7f1c8f67182574d6ebc4ac541b018a1",
+      "size": 1079,
+      "normalized_sha256": "d48211ca51b7f73e7e773ab4f51fe782e7f1c8f67182574d6ebc4ac541b018a1"
+    },
+    ".build/passport-idf/tools/python_env/idf5.5_py3.12_env/lib/python3.12/site-packages/colorama/tests/winterm_test.py": {
+      "role": "observe",
+      "sha256": "aa85853c48f29b9826d91b8cc297f7a4e8acddae6bfcf259142ccadb9e092fc0",
+      "size": 3709,
+      "normalized_sha256": "aa85853c48f29b9826d91b8cc297f7a4e8acddae6bfcf259142ccadb9e092fc0"
+    },
+    ".build/passport-idf/tools/python_env/idf5.5_py3.12_env/lib/python3.12/site-packages/ecdsa/test_curves.py": {
+      "role": "observe",
+      "sha256": "97937e9b8628e48032e1af1a24cb016a669294b01f4a862362a0a3d470c45695",
+      "size": 13081,
+      "normalized_sha256": "97937e9b8628e48032e1af1a24cb016a669294b01f4a862362a0a3d470c45695"
+    },
+    ".build/passport-idf/tools/python_env/idf5.5_py3.12_env/lib/python3.12/site-packages/ecdsa/test_der.py": {
+      "role": "observe",
+      "sha256": "73d31a16466e665fd5dc8126dfd7807e21c0117b76fcfa5057b7e1a79a979a41",
+      "size": 19849,
+      "normalized_sha256": "73d31a16466e665fd5dc8126dfd7807e21c0117b76fcfa5057b7e1a79a979a41"
+    },
+    ".build/passport-idf/tools/python_env/idf5.5_py3.12_env/lib/python3.12/site-packages/ecdsa/test_ecdh.py": {
+      "role": "observe",
+      "sha256": "db44c463219c9f29c03d2f6796bfe4d9e77a4bb949d59d1b6e884d53ea4419ca",
+      "size": 15380,
+      "normalized_sha256": "db44c463219c9f29c03d2f6796bfe4d9e77a4bb949d59d1b6e884d53ea4419ca"
+    },
+    ".build/passport-idf/tools/python_env/idf5.5_py3.12_env/lib/python3.12/site-packages/ecdsa/test_ecdsa.py": {
+      "role": "observe",
+      "sha256": "57943843bb9415f4ad55d785b70857569165162d0dc79279babbbd4f78ffdc34",
+      "size": 25037,
+      "normalized_sha256": "57943843bb9415f4ad55d785b70857569165162d0dc79279babbbd4f78ffdc34"
+    },
+    ".build/passport-idf/tools/python_env/idf5.5_py3.12_env/lib/python3.12/site-packages/ecdsa/test_eddsa.py": {
+      "role": "observe",
+      "sha256": "d637c717f652ca2965bfa0cb28967449e61385ab93087b3244d030792ff83044",
+      "size": 33720,
+      "normalized_sha256": "d637c717f652ca2965bfa0cb28967449e61385ab93087b3244d030792ff83044"
+    },
+    ".build/passport-idf/tools/python_env/idf5.5_py3.12_env/lib/python3.12/site-packages/ecdsa/test_ellipticcurve.py": {
+      "role": "observe",
+      "sha256": "9af2010ff28aace63856977829c47727c44207120d26da9696cd56304b058271",
+      "size": 8798,
+      "normalized_sha256": "9af2010ff28aace63856977829c47727c44207120d26da9696cd56304b058271"
+    },
+    ".build/passport-idf/tools/python_env/idf5.5_py3.12_env/lib/python3.12/site-packages/ecdsa/test_jacobi.py": {
+      "role": "observe",
+      "sha256": "495ad2fbe3d2c036a40988addb5ea4866cc5f1e42bc96b62237b1859dffaf3dd",
+      "size": 25811,
+      "normalized_sha256": "495ad2fbe3d2c036a40988addb5ea4866cc5f1e42bc96b62237b1859dffaf3dd"
+    },
+    ".build/passport-idf/tools/python_env/idf5.5_py3.12_env/lib/python3.12/site-packages/ecdsa/test_keys.py": {
+      "role": "observe",
+      "sha256": "ade4362ad7ceb0035ae7d0aabef4568d99be49a59fb1c259549684f511722fde",
+      "size": 39415,
+      "normalized_sha256": "ade4362ad7ceb0035ae7d0aabef4568d99be49a59fb1c259549684f511722fde"
+    },
+    ".build/passport-idf/tools/python_env/idf5.5_py3.12_env/lib/python3.12/site-packages/ecdsa/test_malformed_sigs.py": {
+      "role": "observe",
+      "sha256": "0e0d4392f833d6d3be2a167a7fd651963ca4cfc14162d95dde1ab55b684b2ccf",
+      "size": 11289,
+      "normalized_sha256": "0e0d4392f833d6d3be2a167a7fd651963ca4cfc14162d95dde1ab55b684b2ccf"
+    },
+    ".build/passport-idf/tools/python_env/idf5.5_py3.12_env/lib/python3.12/site-packages/ecdsa/test_numbertheory.py": {
+      "role": "observe",
+      "sha256": "613b5c96dff9d27ff6e14fffaf62725772c4a91d81b01980e88260870043cfc7",
+      "size": 13265,
+      "normalized_sha256": "613b5c96dff9d27ff6e14fffaf62725772c4a91d81b01980e88260870043cfc7"
+    },
+    ".build/passport-idf/tools/python_env/idf5.5_py3.12_env/lib/python3.12/site-packages/ecdsa/test_pyecdsa.py": {
+      "role": "observe",
+      "sha256": "db3a167d1ff102a6a028e147549b7875365969cbb5cd3e09c571ff1c9500056f",
+      "size": 91272,
+      "normalized_sha256": "db3a167d1ff102a6a028e147549b7875365969cbb5cd3e09c571ff1c9500056f"
+    },
+    ".build/passport-idf/tools/python_env/idf5.5_py3.12_env/lib/python3.12/site-packages/ecdsa/test_rw_lock.py": {
+      "role": "observe",
+      "sha256": "6f2bf4fc54ccf7471bb873c223afff2de4099072ffcd811e5582013bc7b62cb7",
+      "size": 7021,
+      "normalized_sha256": "6f2bf4fc54ccf7471bb873c223afff2de4099072ffcd811e5582013bc7b62cb7"
+    },
+    ".build/passport-idf/tools/python_env/idf5.5_py3.12_env/lib/python3.12/site-packages/ecdsa/test_sha3.py": {
+      "role": "observe",
+      "sha256": "d0f9168bb0274c9d7460d7c356a8f6481eda75e4db57a0c2bcc8389fd50b69df",
+      "size": 3042,
+      "normalized_sha256": "d0f9168bb0274c9d7460d7c356a8f6481eda75e4db57a0c2bcc8389fd50b69df"
+    },
+    ".build/passport-idf/tools/python_env/idf5.5_py3.12_env/lib/python3.12/site-packages/pip/_vendor/certifi/tests/__init__.py": {
+      "role": "observe",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    ".build/passport-idf/tools/python_env/idf5.5_py3.12_env/lib/python3.12/site-packages/pip/_vendor/certifi/tests/test_certify.py": {
+      "role": "observe",
+      "sha256": "4c6495936bf1fda4b47abdbfdc762179a37857ed676564d5c20ccc2492958c5f",
+      "size": 484,
+      "normalized_sha256": "4c6495936bf1fda4b47abdbfdc762179a37857ed676564d5c20ccc2492958c5f"
+    },
     ".gitattributes": {
       "role": "index",
       "sha256": "21fa16a2122e2b0360b47502c577428b645437e08e9e87ffba661f84853cb476",
@@ -17,9 +189,9 @@
     },
     "AGENTS.md": {
       "role": "index",
-      "sha256": "a489754de9958b2bd956b27f7e94f77ebaf6fec3bd52566a961a8e7a258b0170",
-      "size": 17160,
-      "normalized_sha256": "a489754de9958b2bd956b27f7e94f77ebaf6fec3bd52566a961a8e7a258b0170"
+      "sha256": "58531520968764167143759a1816204dd171304018a8364859d57dcfebb74d0c",
+      "size": 14634,
+      "normalized_sha256": "58531520968764167143759a1816204dd171304018a8364859d57dcfebb74d0c"
     },
     "GLOSSARY.md": {
       "role": "index",
@@ -161,21 +333,21 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "71a3ff999e01f4e1ebcc98a40bfd53a209d477448595b14dcd33c80dd864fc55",
-      "size": 20539,
-      "normalized_sha256": "71a3ff999e01f4e1ebcc98a40bfd53a209d477448595b14dcd33c80dd864fc55"
+      "sha256": "a200a4c59fd641ffe1a3694dde62d695cf1a35a5c9c3579029931d7f8e0d1421",
+      "size": 18256,
+      "normalized_sha256": "a200a4c59fd641ffe1a3694dde62d695cf1a35a5c9c3579029931d7f8e0d1421"
     },
     "aoci.meta.txt": {
       "role": "index",
-      "sha256": "4e847b2679814f2d38ff8f9c44b03e026619f84d724be83634539eb369fe0199",
-      "size": 2534,
-      "normalized_sha256": "4e847b2679814f2d38ff8f9c44b03e026619f84d724be83634539eb369fe0199"
+      "sha256": "5ccd06dd2198435423141174e4f3eaed7e7645644070e0b5cc2e20dbc889172a",
+      "size": 2187,
+      "normalized_sha256": "5ccd06dd2198435423141174e4f3eaed7e7645644070e0b5cc2e20dbc889172a"
     },
     "aoci.txt": {
       "role": "index",
-      "sha256": "5c547390fb76cce476984761582a64780acca89a417006083403d76ded710d57",
+      "sha256": "1e873cf1ba8491a6314f9d5cfb993da2ff48b96b745982d9043cd22fd0529d4d",
       "size": 298,
-      "normalized_sha256": "5c547390fb76cce476984761582a64780acca89a417006083403d76ded710d57"
+      "normalized_sha256": "1e873cf1ba8491a6314f9d5cfb993da2ff48b96b745982d9043cd22fd0529d4d"
     },
     "app/Info.plist": {
       "role": "index",

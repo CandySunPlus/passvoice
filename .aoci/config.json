@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "locale": "en-US",
+  "locale": "zh-CN",
   "index_path": "aoci.txt",
   "exclude_dirs": [
     "node_modules",
